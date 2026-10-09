@@ -43,7 +43,7 @@ class Orchestrator:
         return {"job": job.model_dump()}
 
     def prepare_workspace(self, state):
-        job = self._job(state); job.status = "preparing"; job.workspace = str(self.s.data_dir / "workspaces" / job.job_id)
+        job = self._job(state); job.status = "preparing"; job.workspace = str((self.s.data_dir / "workspaces" / job.job_id).resolve())
         try:
             job.base_branch, job.working_branch, job.base_sha = self.git.prepare(job.repo_url, Path(job.workspace), job.job_id, job.base_branch or None)
         except Exception as exc:  # noqa: BLE001
