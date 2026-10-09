@@ -34,6 +34,16 @@ class Orchestrator:
         graph.add_edge("terminal_success", END)
         graph.add_edge("terminal_failure", END)
         self.workflow = graph.compile(checkpointer=self.checkpointer)
+        resume_graph = StateGraph(WorkerState)
+        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+            resume_graph.add_node(name, node)
+        resume_graph.add_edge(START, "development")
+        resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
+        resume_graph.add_edge("terminal_success", END); resume_graph.add_edge("terminal_failure", END)
+        self.resume_workflow = resume_graph.compile(checkpointer=self.checkpointer)
 
     @staticmethod
     def _job(state):
@@ -120,6 +130,7 @@ class Orchestrator:
         # Delivery status is persisted independently; it must not downgrade publication.
         return "success"
 
-    def run(self, job: Job):
-        result = self.workflow.invoke({"job": job.model_dump()}, config={"configurable": {"thread_id": job.job_id}})
+    def run(self, job: Job, start_at="prepare_workspace"):
+        workflow = self.resume_workflow if start_at == "development" else self.workflow
+        result = workflow.invoke({"job": job.model_dump()}, config={"configurable": {"thread_id": job.job_id}})
         return self._job(result)

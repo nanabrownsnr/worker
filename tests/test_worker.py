@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from autodev.config import Settings
@@ -70,6 +71,36 @@ def test_checkpoint_preserves_development_stage(tmp_path):
     svc.orch.run(j)
     states=list(svc.orch.workflow.get_state_history({"configurable":{"thread_id":"j"}}))
     assert any(x.values.get("job",{}).get("status")=="developing" for x in states if x.values)
+
+def test_resume_links_child_and_preserves_workspace(tmp_path):
+    _,store,svc,_,_,_,_=setup(tmp_path)
+    workspace=tmp_path / "existing"; workspace.mkdir(); marker=workspace / "uncommitted.txt"; marker.write_text("keep")
+    original=Job(job_id="failed",prompt="original",repo_url="https://github.com/o/r.git",workspace=str(workspace),status="failed",failure_context="Hermes stopped")
+    store.put(original); child=svc.resume("failed")
+    for _ in range(50):
+        current=store.get(child.job_id)
+        if current and current.status in ("completed","failed"): break
+        time.sleep(0.01)
+    assert child.parent_job_id=="failed" and store.get("failed").final_result=={}
+    assert store.get(child.job_id).workspace==str(workspace) and marker.read_text()=="keep"
+
+def test_resume_rejects_nonterminal_or_missing_workspace(tmp_path):
+    _,store,svc,_,_,_,_=setup(tmp_path)
+    store.put(Job(job_id="queued",prompt="p",repo_url="https://github.com/o/r.git",status="queued"))
+    try: svc.resume("queued"); assert False
+    except ValueError as exc: assert "terminally failed" in str(exc)
+    store.put(Job(job_id="failed",prompt="p",repo_url="https://github.com/o/r.git",status="failed",workspace=str(tmp_path/"gone")))
+    try: svc.resume("failed"); assert False
+    except ValueError as exc: assert "workspace" in str(exc)
+
+def test_resume_rejects_second_active_execution(tmp_path):
+    _,store,svc,_,_,_,_=setup(tmp_path); workspace=tmp_path/"existing"; workspace.mkdir()
+    store.put(Job(job_id="failed",prompt="p",repo_url="https://github.com/o/r.git",status="failed",workspace=str(workspace)))
+    svc.orch.run=lambda *args, **kwargs: time.sleep(0.2)
+    first=svc.resume("failed")
+    try: svc.resume("failed"); assert False
+    except ValueError as exc: assert "active execution" in str(exc)
+    assert first.parent_job_id=="failed"
 
 def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)

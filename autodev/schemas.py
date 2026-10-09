@@ -14,6 +14,7 @@ class JobRequest(BaseModel):
 
 class Job(BaseModel):
     job_id: str
+    parent_job_id: str = ""
     prompt: str
     repo_url: str
     workspace: str = ""
