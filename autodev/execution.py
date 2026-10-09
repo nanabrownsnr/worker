@@ -16,9 +16,9 @@ def run(args, cwd: Path | None = None, timeout=900, env=None, log_path: Path | N
     try:
         p = subprocess.run(args, cwd=cwd, env=merged, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, start_new_session=True, check=False)
         result = {"args": args, "returncode": p.returncode, "stdout": p.stdout, "stderr": p.stderr, "timed_out": False, "duration": time.monotonic()-started}
-        if log_path: log_path.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
+        if log_path: log_path.write_text(redact(result["stdout"] + "\n" + result["stderr"]), encoding="utf-8")
         return result
     except subprocess.TimeoutExpired as e:
         result = {"args": args, "returncode": -1, "stdout": e.stdout or "", "stderr": e.stderr or "", "timed_out": True, "duration": time.monotonic()-started}
-        if log_path: log_path.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
+        if log_path: log_path.write_text(redact(result["stdout"] + "\n" + result["stderr"]), encoding="utf-8")
         return result
