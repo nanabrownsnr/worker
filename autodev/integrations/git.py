@@ -15,6 +15,15 @@ class GitPublisher:
     def _env(self):
         if not self.s.github_token: return None
         return {"GITHUB_TOKEN": self.s.github_token, "GIT_ASKPASS": "/app/autodev/integrations/git_askpass.py", "GIT_USERNAME": self.s.github_username}
+    @staticmethod
+    def _ensure_safe_ignores(workspace: Path):
+        path = workspace / ".gitignore"
+        rules = [".env\n", ".env.*\n", "!.env.example\n", ".venv/\n", "logs/\n", ".cache/\n", "node_modules/\n"]
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        missing = [rule for rule in rules if rule not in existing.splitlines(keepends=True)]
+        if missing:
+            prefix = "\n# Worker-managed local and generated files\n"
+            path.write_text(existing + prefix + "".join(missing), encoding="utf-8")
     def prepare(self, repo_url, workspace: Path, job_id, base_branch=None):
         if not re.match(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$", repo_url): raise ValueError("unsafe repository URL")
         workspace.parent.mkdir(parents=True, exist_ok=True)
@@ -27,6 +36,7 @@ class GitPublisher:
         if r["returncode"]: raise RuntimeError(redact(r["stderr"]))
         return branch, working, sha
     def publish(self, workspace: Path, branch: str):
+        self._ensure_safe_ignores(workspace)
         diff = run(["git","status","--porcelain"], workspace)["stdout"]
         if not diff.strip(): return {"no_changes": True, "branch": branch}
         changed = [line[3:] for line in diff.splitlines()]
