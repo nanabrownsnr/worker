@@ -17,6 +17,8 @@ def create_app(settings=None, service=None):
     s=settings or Settings(); s.data_dir.mkdir(parents=True,exist_ok=True)
     store=JobStore(s.data_dir/"jobs.sqlite")
     service=service or Service(s,store,Orchestrator(s,store,Hermes(s),PytestRunner(s),GitPublisher(s),Telegram(s)))
+    if service and hasattr(service, "reconcile_interrupted"):
+        service.reconcile_interrupted()
     mcp=FastMCP("Worker")
     @mcp.tool()
     def submit_job(prompt: str, repo_url: str): return service.submit(JobRequest(prompt=prompt,repo_url=repo_url)).model_dump()

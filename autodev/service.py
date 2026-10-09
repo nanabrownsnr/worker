@@ -6,6 +6,15 @@ from .schemas import Job, JobRequest
 
 class Service:
     def __init__(self, settings, store, orchestrator): self.s,self.store,self.orch=settings,store,orchestrator; self.lock=threading.Lock(); self.workspace_locks=set(); self.active=False
+    def reconcile_interrupted(self):
+        """Convert work that died with the process into an explicit resumable failure."""
+        for job in self.store.all_nonterminal():
+            job.status = "failed"
+            reason = "Worker process restarted before job reached a terminal state"
+            job.failure_context = reason
+            job.failure_history.append(reason)
+            job.final_result = {"outcome": "failed", "reason": reason, "interrupted": True}
+            self.store.put(job)
     def submit(self, req: JobRequest):
         if req.job_id and self.store.get(req.job_id): return self.store.get(req.job_id)
         job=Job(job_id=req.job_id or uuid.uuid4().hex, prompt=req.prompt, repo_url=req.repo_url, max_returns=self.s.max_returns, base_branch=req.base_branch or "")

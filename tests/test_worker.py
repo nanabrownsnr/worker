@@ -128,6 +128,16 @@ def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     # avoid asynchronous timing dependency: durable idempotency is still stable
     j=Job(job_id="same",prompt="p",repo_url="https://github.com/o/r.git"); store.put(j); assert svc.submit(JobRequest(job_id="same",prompt="other",repo_url=j.repo_url)).job_id=="same"
 
+def test_startup_reconciles_interrupted_jobs_for_resume(tmp_path):
+    _,store,svc,_,_,_,_=setup(tmp_path)
+    workspace=tmp_path / "existing"; workspace.mkdir()
+    store.put(Job(job_id="interrupted",prompt="p",repo_url="https://github.com/o/r.git",workspace=str(workspace),status="developing"))
+    svc.reconcile_interrupted()
+    job=store.get("interrupted")
+    assert job.status=="failed" and job.final_result["interrupted"] is True
+    child=svc.resume("interrupted")
+    assert child.parent_job_id=="interrupted"
+
 def test_tester_detects_uv_and_executes_in_workspace(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n"); (tmp_path / "test_one.py").write_text("def test_ok(): pass\n")
     seen={}

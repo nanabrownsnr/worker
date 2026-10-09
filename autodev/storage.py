@@ -21,3 +21,8 @@ class JobStore:
     def list(self, limit=50):
         with sqlite3.connect(self.path) as c: rows = c.execute("SELECT data FROM jobs ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
         return [Job.model_validate_json(r[0]) for r in rows]
+
+    def all_nonterminal(self):
+        with sqlite3.connect(self.path) as c:
+            rows = c.execute("SELECT data FROM jobs WHERE json_extract(data, '$.status') NOT IN ('completed', 'failed')").fetchall()
+        return [Job.model_validate_json(r[0]) for r in rows]
