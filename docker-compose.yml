@@ -19,7 +19,7 @@ services:
     ports:
       - "0.0.0.0:8002:8000"
     volumes:
-      - worker_data:/var/lib/worker/data
+      - ./data:/var/lib/worker/data
       - ${HOME}/.hermes:/home/nbrown/.hermes
       - ${HOME}/.local/bin/hermes:/usr/local/bin/hermes:ro
     healthcheck:
@@ -28,6 +28,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-
-volumes:
-  worker_data:

@@ -44,6 +44,18 @@ Then run `sudo systemctl daemon-reload && sudo systemctl enable --now worker`.
 ## Verification
 
 The test suite uses fake Hermes, pytest, Git, and Telegram integrations, so it does not require GitHub, Telegram, or model credentials. Real Hermes CLI flags must be checked against the installed Hermes version before enabling production execution; an optional real integration is intentionally not enabled by default.
-The Docker Compose setup keeps SQLite, LangGraph checkpoints, logs, and workspaces in the named worker_data volume and restarts independently of terminal sessions.
+The Docker Compose setup keeps SQLite, LangGraph checkpoints, logs, and workspaces in the host-backed ./data directory and restarts independently of terminal sessions.
 Run: docker compose up -d --build, docker compose logs -f worker, docker compose stop, and docker compose start.
 It mounts the installed Hermes executable/configuration and routes the container to the host model endpoint through host.docker.internal:8000.
+
+Runtime state and backups
+
+The `./data` directory is intentionally not committed. It contains the SQLite job index, LangGraph checkpoints, redacted logs, and cloned job workspaces. Back it up while the service is stopped:
+
+```bash
+docker compose stop
+tar -czf worker-data-$(date +%Y%m%d-%H%M%S).tgz data
+docker compose start
+```
+
+Do not run `docker compose down -v` as a routine cleanup command. The current Compose configuration uses the host-backed directory, but older deployments may still have state in the `worker_worker_data` Docker volume. Git credentials are deliberately not mounted into the Worker container because Hermes runs there; configure a narrowly scoped noninteractive Git credential mechanism only after reviewing that security tradeoff.
