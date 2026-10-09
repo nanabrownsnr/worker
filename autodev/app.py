@@ -39,6 +39,6 @@ def create_app(settings=None, service=None):
             return JSONResponse(j.model_dump())
         return JSONResponse({"detail":"not found"},status_code=404)
     mcp.custom_route("/jobs",methods=["POST"])(routes); mcp.custom_route("/health",methods=["GET"])(routes); mcp.custom_route("/jobs/{job_id}",methods=["GET"])(routes); mcp.custom_route("/jobs/{job_id}/result",methods=["GET"])(routes)
-    return mcp
+    return mcp.http_app()
 
 app=create_app()
