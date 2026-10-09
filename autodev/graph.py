@@ -116,7 +116,13 @@ class Orchestrator:
 
     def telegram_notification(self, state):
         job = self._job(state); job.status = "notifying"; outcome = job.final_result.get("outcome", "failed")
-        job.notification_status = self.telegram.send(f"Worker {outcome}: {job.job_id} {job.repo_url} branch={job.published_branch} sha={job.remote_verified_sha} returns={job.return_count}")
+        test = job.test_result
+        message = (f"Worker {outcome}\njob={job.job_id}\nrepo={job.repo_url}\n"
+                   f"stage={job.status} tests={'passed' if test.get('passed') else 'failed'} "
+                   f"returns={job.return_count}/{job.max_returns} hermes_retries={job.hermes_retry_count}\n"
+                   f"branch={job.published_branch or '-'} sha={job.remote_verified_sha or '-'}")
+        if outcome == "failed": message += f"\nreason={job.final_result.get('reason', job.failure_context)[-500:]}"
+        job.notification_status = self.telegram.send(message)
         return self._save(job)
 
     def terminal_success(self, state):
@@ -124,7 +130,9 @@ class Orchestrator:
 
     def terminal_failure(self, state):
         job = self._job(state); job.status = "failed"
-        if not job.notification_status: job.notification_status = self.telegram.send(f"Worker failed: {job.job_id} returns={job.return_count}")
+        if not job.notification_status:
+            reason = job.final_result.get("reason", job.failure_context)[-500:]
+            job.notification_status = self.telegram.send(f"Worker failed\njob={job.job_id}\nrepo={job.repo_url}\nstage={job.status}\nreturns={job.return_count}/{job.max_returns}\nhermes_retries={job.hermes_retry_count}\ngit_repairs={job.git_repair_count}\nreason={reason}")
         return self._save(job)
 
     def route_test(self, state):

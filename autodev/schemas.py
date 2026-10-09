@@ -38,3 +38,21 @@ class Job(BaseModel):
     published_branch: str = ""
     notification_status: dict[str, Any] = Field(default_factory=dict)
     final_result: dict[str, Any] = Field(default_factory=dict)
+
+    def public_dict(self, *, detail: bool = False) -> dict[str, Any]:
+        """Return a bounded API representation without the original prompt or raw logs."""
+        result = {
+            "job_id": self.job_id, "parent_job_id": self.parent_job_id, "repo_url": self.repo_url,
+            "status": self.status, "workspace": self.workspace, "base_branch": self.base_branch,
+            "working_branch": self.working_branch, "attempt_number": self.attempt_number,
+            "hermes_retry_count": self.hermes_retry_count, "git_repair_count": self.git_repair_count,
+            "return_count": self.return_count, "max_returns": self.max_returns,
+            "created_at": self.created_at, "updated_at": self.updated_at,
+            "commit_sha": self.commit_sha, "remote_verified_sha": self.remote_verified_sha,
+            "published_branch": self.published_branch, "notification_status": self.notification_status,
+            "final_result": self.final_result,
+        }
+        if detail:
+            result["test_result"] = {k: self.test_result.get(k) for k in ("command", "framework", "returncode", "passed", "summary", "collected", "timed_out", "duration") if k in self.test_result}
+            result["failure_context"] = self.failure_context[-2000:]
+        return result
