@@ -26,7 +26,8 @@ class Hermes:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"hermes-attempt-{int(time.time() * 1000)}.log"
         try:
-            result = run(args, cwd=workspace, timeout=self.s.hermes_timeout_seconds, log_path=log_path)
+            env = {"OPENAI_BASE_URL": self.s.hermes_endpoint} if self.s.hermes_endpoint else None
+            result = run(args, cwd=workspace, timeout=self.s.hermes_timeout_seconds, env=env, log_path=log_path)
         except FileNotFoundError as exc:
             result = {"args": args, "returncode": 127, "stdout": "", "stderr": str(exc), "timed_out": False, "duration": 0.0}
         result["stdout"] = redact(result.get("stdout", "")); result["stderr"] = redact(result.get("stderr", ""))
