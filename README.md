@@ -17,7 +17,7 @@ uv run ruff check .
 uv run python -m autodev.main
 ```
 
-The default bind is `127.0.0.1:8000`. `/health` is public; job and MCP interfaces require `Authorization: Bearer $AUTODEV_API_TOKEN`. FastMCP is mounted on the same ASGI application. Use `POST /jobs` with `{"prompt":"...", "repo_url":"https://github.com/owner/repo.git"}` and poll `GET /jobs/{job_id}`. The MCP endpoint is exposed by FastMCP at its default `/mcp` route.
+The default bind is `127.0.0.1:8000`. FastMCP is mounted on the same ASGI application. Use `POST /jobs` with `{"prompt":"...", "repo_url":"https://github.com/owner/repo.git"}` and poll `GET /jobs/{job_id}`. The MCP endpoint is exposed by FastMCP at its default `/mcp` route. Keep the service bound to localhost or protect it with an upstream network control if exposing it remotely; V1 does not require a separate AutoDev API key.
 
 Set `AUTODEV_DATA_DIR` outside a Git checkout. SQLite jobs and logs/state survive restarts. Jobs are durably inserted before the HTTP response and execution is serialized; queued jobs wait for the active job. A production restart should reconcile nonterminal jobs before starting new work; the current V1 conservatively keeps the durable record and requires an operator to resubmit a nonterminal job after an interrupted process.
 

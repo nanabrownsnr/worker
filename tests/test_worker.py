@@ -22,7 +22,7 @@ class TelegramFake:
     def send(self,msg): self.messages.append(msg); return {"sent":True}
 
 def setup(tmp_path, hermes=None, tester=None):
-    s=Settings(data_dir=tmp_path,allowed_repos="https://github.com/o/r.git",api_token="x")
+    s=Settings(data_dir=tmp_path)
     store=JobStore(tmp_path/"jobs.sqlite"); h=hermes or HermesFake(); t=tester or TesterFake([True]); g=GitFake(); n=TelegramFake()
     return s,store,Service(s,store,Orchestrator(s,store,h,t,g,n)),h,t,g,n
 
@@ -38,9 +38,7 @@ def test_failure_then_repair(tmp_path):
     _,_,svc,h,_,_,_=setup(tmp_path,tester=TesterFake([False,True])); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
     out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and h.calls[1][2]=="failure"
 
-def test_submission_rejects_unapproved_and_idempotent(tmp_path):
+def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
-    try: svc.submit(JobRequest(prompt="p",repo_url="https://github.com/x/y.git")); assert False
-    except ValueError: pass
     # avoid asynchronous timing dependency: durable idempotency is still stable
     j=Job(job_id="same",prompt="p",repo_url="https://github.com/o/r.git"); store.put(j); assert svc.submit(JobRequest(job_id="same",prompt="other",repo_url=j.repo_url)).job_id=="same"

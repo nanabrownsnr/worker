@@ -18,8 +18,6 @@ def create_app(settings=None, service=None):
     store=JobStore(s.data_dir/"jobs.sqlite")
     service=service or Service(s,store,Orchestrator(s,store,Hermes(s),PytestRunner(s),GitPublisher(s),Telegram(s)))
     mcp=FastMCP("Worker")
-    def auth(request):
-        return request.headers.get("authorization","") == f"Bearer {s.api_token}"
     @mcp.tool()
     def submit_job(prompt: str, repo_url: str): return service.submit(JobRequest(prompt=prompt,repo_url=repo_url)).model_dump()
     @mcp.tool()
@@ -31,7 +29,6 @@ def create_app(settings=None, service=None):
     def list_jobs(limit: int=50): return [j.model_dump() for j in store.list(min(limit,100))]
     async def routes(request: Request):
         if request.url.path == "/health": return JSONResponse({"status":"ok"})
-        if not auth(request): return JSONResponse({"detail":"unauthorized"},status_code=401)
         if request.method=="POST" and request.url.path=="/jobs":
             try: return JSONResponse(service.submit(JobRequest.model_validate(await request.json())).model_dump(),status_code=202)
             except ValueError as e: return JSONResponse({"detail":str(e)},status_code=400)

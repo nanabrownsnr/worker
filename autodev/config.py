@@ -6,8 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     data_dir: Path = Path("./data")
-    api_token: str = "change-me"
-    allowed_repos: str = ""
     max_returns: int = 5
     bind_host: str = "127.0.0.1"
     port: int = 8000
@@ -23,7 +21,3 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_retries: int = 3
-
-    @property
-    def allowed_repo_set(self) -> set[str]:
-        return {x.strip().rstrip("/") for x in self.allowed_repos.split(",") if x.strip()}
