@@ -14,7 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:8002:8000"
+      - "0.0.0.0:8002:8000"
     volumes:
       - worker_data:/var/lib/worker/data
       - ${HOME}/.hermes:/home/nbrown/.hermes:ro
