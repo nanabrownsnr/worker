@@ -4,6 +4,7 @@ from pathlib import Path
 from autodev.config import Settings
 from autodev.execution import redact
 from autodev.graph import Orchestrator
+from autodev.integrations.git import GitPublicationError
 from autodev.schemas import Job, JobRequest
 from autodev.service import Service
 from autodev.storage import JobStore
@@ -46,6 +47,19 @@ def test_five_returns_terminal_without_publish(tmp_path):
 def test_failure_then_repair(tmp_path):
     _,_,svc,h,_,_,_=setup(tmp_path,tester=TesterFake([False,True])); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
     out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and h.calls[1][2]=="failure"
+
+def test_git_hygiene_failure_returns_to_hermes(tmp_path):
+    class HygieneGit(GitFake):
+        def publish(self, workspace, branch):
+            self.published += 1
+            if self.published == 1:
+                raise GitPublicationError("secret-like file in changes: .env", repairable=True)
+            return {"commit_sha":"c","remote_verified_sha":"c","branch":branch}
+    s,store,_,h,t,_,n=setup(tmp_path,tester=TesterFake([True, True]))
+    g=HygieneGit()
+    orch=Orchestrator(s,store,h,t,g,n)
+    out=orch.run(Job(job_id="git-repair",prompt="p",repo_url="https://github.com/o/r.git"))
+    assert out.status=="completed" and out.git_repair_count==1 and out.return_count==0 and len(h.calls)==2
 
 def test_hermes_failure_retries_without_consuming_pytest_returns(tmp_path):
     h=HermesSequence([{"returncode":2,"stdout":"secret token=abc","stderr":"boom","timed_out":False,"duration":1,"classification":"uncertain_execution_failure","reason":"exit 2","last_activity":"boom"},{"returncode":0,"stdout":"ok","stderr":"","timed_out":False,"duration":1}])

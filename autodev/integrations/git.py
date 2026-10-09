@@ -32,10 +32,12 @@ class GitPublisher:
         changed = [line[3:] for line in diff.splitlines()]
         forbidden = re.compile(r"(^|/)(\.env$|.*(credential|secret|token).*)$", re.IGNORECASE)
         hygiene = re.compile(r"(^|/)(logs?|\.cache|\.venv|node_modules)(/|$)", re.IGNORECASE)
-        if any(forbidden.search(path) for path in changed):
-            raise GitPublicationError("secret-like file in changes: " + ", ".join(changed), repairable=True)
-        if any(hygiene.search(path) for path in changed):
-            raise GitPublicationError("generated artifact in changes: " + ", ".join(changed), repairable=True)
+        forbidden_paths = [path for path in changed if forbidden.search(path)]
+        hygiene_paths = [path for path in changed if hygiene.search(path)]
+        if forbidden_paths:
+            raise GitPublicationError("secret-like file in changes: " + ", ".join(forbidden_paths), repairable=True)
+        if hygiene_paths:
+            raise GitPublicationError("generated artifact in changes: " + ", ".join(hygiene_paths), repairable=True)
         for args in (["git","add","-A"],["git","commit","-m",f"AutoDev: implement job {branch}"]):
             r = run(args, workspace, env=self._env())
             if r["returncode"]: raise GitPublicationError(redact(r["stderr"]))

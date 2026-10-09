@@ -58,14 +58,6 @@ class Orchestrator:
         job = self._job(state); job.status = "preparing"; job.workspace = str((self.s.data_dir / "workspaces" / job.job_id).resolve())
         try:
             job.base_branch, job.working_branch, job.base_sha = self.git.prepare(job.repo_url, Path(job.workspace), job.job_id, job.base_branch or None)
-        except GitPublicationError as exc:
-            job.failure_context = str(exc)
-            if exc.repairable and job.git_repair_count < self.s.git_repair_retries:
-                job.git_repair_count += 1
-                job.failure_history.append("Git publication hygiene failure: " + str(exc))
-                job.final_result = {}
-            else:
-                job.final_result = {"outcome": "failed", "reason": str(exc)}
         except Exception as exc:  # noqa: BLE001
             job.final_result = {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
@@ -110,6 +102,14 @@ class Orchestrator:
         job = self._job(state); job.status = "publishing"
         try:
             result = self.git.publish(Path(job.workspace), job.working_branch); job.commit_sha = result.get("commit_sha", ""); job.remote_verified_sha = result.get("remote_verified_sha", ""); job.published_branch = job.working_branch; job.final_result = {"outcome": "no_changes" if result.get("no_changes") else "completed", "verification": job.test_result}
+        except GitPublicationError as exc:
+            job.failure_context = str(exc)
+            if exc.repairable and job.git_repair_count < self.s.git_repair_retries:
+                job.git_repair_count += 1
+                job.failure_history.append("Git publication hygiene failure: " + str(exc))
+                job.final_result = {}
+            else:
+                job.final_result = {"outcome": "failed", "reason": str(exc)}
         except Exception as exc:  # noqa: BLE001
             job.final_result = {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
