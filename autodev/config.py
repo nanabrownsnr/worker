@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     hermes_model: str = "qwen3.5:35b-a3b"
     hermes_timeout_seconds: int = 3600
     hermes_retries: int = 2
+    hermes_retry_delay_seconds: float = 2.0
+    hermes_endpoint: str = ""
     test_timeout_seconds: int = 900
     test_command: str = ""
     git_remote_name: str = "origin"

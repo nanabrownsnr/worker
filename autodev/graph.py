@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -26,7 +27,7 @@ class Orchestrator:
             graph.add_node(name, node)
         graph.add_edge(START, "prepare_workspace")
         graph.add_edge("prepare_workspace", "development")
-        graph.add_edge("development", "independent_testing")
+        graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
         graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "failure": "terminal_failure"})
         graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
@@ -54,10 +55,28 @@ class Orchestrator:
         job = self._job(state)
         if job.final_result: return self._save(job)
         job.status = "developing"; job.attempt_number += 1
+        self._save(job)
         result = self.hermes.develop(job.prompt, Path(job.workspace), job.failure_context); job.development_result = result
         if result.get("returncode") != 0:
-            job.failure_context = "Hermes failed: " + result.get("stderr", "")[-3000:]; job.failure_history.append(job.failure_context); job.final_result = {"outcome": "failed", "reason": job.failure_context}
+            job.hermes_retry_count += 1
+            job.failure_context = (f"{result.get('reason', 'Hermes failed')}\nclassification={result.get('classification')}\n"
+                                   f"duration={result.get('duration')}\nlast_activity={result.get('last_activity', '')}\n"
+                                   f"log_path={result.get('log_path', '')}\nstdout:\n{result.get('stdout', '')[-4000:]}\nstderr:\n{result.get('stderr', '')[-4000:]}")
+            job.failure_history.append(job.failure_context)
+            if result.get("classification") == "nonrecoverable_configuration" or not getattr(self.hermes, "endpoint_reachable", lambda: True)():
+                job.final_result = {"outcome": "failed", "reason": job.failure_context}
         return self._save(job)
+
+    def route_development(self, state):
+        job = self._job(state)
+        if not job.development_result.get("returncode") and not job.final_result: return "testing"
+        if job.final_result: return "failure"
+        if job.hermes_retry_count <= self.s.hermes_retries:
+            if self.s.hermes_retry_delay_seconds: time.sleep(self.s.hermes_retry_delay_seconds)
+            return "retry_development"
+        job.final_result = {"outcome": "failed", "reason": job.failure_context or "Hermes retry limit reached"}
+        self.store.put(job)
+        return "failure"
 
     def independent_testing(self, state):
         job = self._job(state)

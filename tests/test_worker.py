@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from autodev.config import Settings
+from autodev.execution import redact
 from autodev.graph import Orchestrator
 from autodev.schemas import Job, JobRequest
 from autodev.service import Service
@@ -21,6 +22,12 @@ class TelegramFake:
     def __init__(self): self.messages=[]
     def send(self,msg): self.messages.append(msg); return {"sent":True}
 
+class HermesSequence:
+    def __init__(self, results): self.results=iter(results); self.calls=[]
+    def develop(self,prompt,workspace,feedback=""):
+        self.calls.append((prompt,workspace,feedback)); return next(self.results)
+    def endpoint_reachable(self): return True
+
 def setup(tmp_path, hermes=None, tester=None):
     s=Settings(data_dir=tmp_path)
     store=JobStore(tmp_path/"jobs.sqlite"); h=hermes or HermesFake(); t=tester or TesterFake([True]); g=GitFake(); n=TelegramFake()
@@ -37,6 +44,32 @@ def test_five_returns_terminal_without_publish(tmp_path):
 def test_failure_then_repair(tmp_path):
     _,_,svc,h,_,_,_=setup(tmp_path,tester=TesterFake([False,True])); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
     out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and h.calls[1][2]=="failure"
+
+def test_hermes_failure_retries_without_consuming_pytest_returns(tmp_path):
+    h=HermesSequence([{"returncode":2,"stdout":"secret token=abc","stderr":"boom","timed_out":False,"duration":1,"classification":"uncertain_execution_failure","reason":"exit 2","last_activity":"boom"},{"returncode":0,"stdout":"ok","stderr":"","timed_out":False,"duration":1}])
+    _,_,svc,_,_,_,_=setup(tmp_path,hermes=h); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
+    out=svc.orch.run(j); assert out.status=="completed" and out.hermes_retry_count==1 and out.return_count==0 and len(h.calls)==2 and "exit 2" in h.calls[1][2]
+
+def test_hermes_retry_exhaustion_is_terminal(tmp_path):
+    h=HermesSequence([{"returncode":2,"stdout":"x","stderr":"y","timed_out":False,"duration":1,"classification":"uncertain_execution_failure","reason":"exit 2","last_activity":"y"}] * 3)
+    s,_,svc,_,_,_,_=setup(tmp_path,hermes=h); s.hermes_retries=2; j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
+    out=svc.orch.run(j); assert out.status=="failed" and out.hermes_retry_count==3 and out.return_count==0 and len(h.calls)==3
+
+def test_hermes_timeout_retries_and_nonrecoverable_executable_fails(tmp_path):
+    timeout={"returncode":-1,"stdout":"partial","stderr":"","timed_out":True,"duration":3,"classification":"recoverable_interruption","reason":"timeout","last_activity":"partial"}
+    h=HermesSequence([timeout,{"returncode":0,"stdout":"ok","stderr":"","timed_out":False,"duration":1}]); _,_,svc,_,_,_,_=setup(tmp_path,hermes=h)
+    assert svc.orch.run(Job(job_id="timeout",prompt="p",repo_url="https://github.com/o/r.git")).status=="completed"
+    bad=HermesSequence([{"returncode":127,"stdout":"","stderr":"missing executable","timed_out":False,"duration":0,"classification":"nonrecoverable_configuration","reason":"missing executable"}]); _,_,svc,_,_,_,_=setup(tmp_path / "bad",hermes=bad)
+    out=svc.orch.run(Job(job_id="bad",prompt="p",repo_url="https://github.com/o/r.git")); assert out.status=="failed" and out.hermes_retry_count==1
+
+def test_redaction_removes_secret_values():
+    assert "abc" not in redact("token=abc password=hunter2")
+
+def test_checkpoint_preserves_development_stage(tmp_path):
+    _,_,svc,_,_,_,_=setup(tmp_path); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
+    svc.orch.run(j)
+    states=list(svc.orch.workflow.get_state_history({"configurable":{"thread_id":"j"}}))
+    assert any(x.values.get("job",{}).get("status")=="developing" for x in states if x.values)
 
 def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
