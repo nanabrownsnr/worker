@@ -4,6 +4,12 @@ from pathlib import Path
 from ..execution import redact, run
 
 
+class GitPublicationError(RuntimeError):
+    def __init__(self, message, *, repairable=False):
+        super().__init__(message)
+        self.repairable = repairable
+
+
 class GitPublisher:
     def __init__(self, settings): self.s = settings
     def _env(self):
@@ -23,16 +29,21 @@ class GitPublisher:
     def publish(self, workspace: Path, branch: str):
         diff = run(["git","status","--porcelain"], workspace)["stdout"]
         if not diff.strip(): return {"no_changes": True, "branch": branch}
-        forbidden = re.compile(r"(^|/)(\.env|.*(credential|secret|token).*)$", re.IGNORECASE)
-        if any(forbidden.search(line[3:]) for line in diff.splitlines()): raise RuntimeError("forbidden or secret-like file in changes")
+        changed = [line[3:] for line in diff.splitlines()]
+        forbidden = re.compile(r"(^|/)(\.env$|.*(credential|secret|token).*)$", re.IGNORECASE)
+        hygiene = re.compile(r"(^|/)(logs?|\.cache|\.venv|node_modules)(/|$)", re.IGNORECASE)
+        if any(forbidden.search(path) for path in changed):
+            raise GitPublicationError("secret-like file in changes: " + ", ".join(changed), repairable=True)
+        if any(hygiene.search(path) for path in changed):
+            raise GitPublicationError("generated artifact in changes: " + ", ".join(changed), repairable=True)
         for args in (["git","add","-A"],["git","commit","-m",f"AutoDev: implement job {branch}"]):
             r = run(args, workspace, env=self._env())
-            if r["returncode"]: raise RuntimeError(redact(r["stderr"]))
+            if r["returncode"]: raise GitPublicationError(redact(r["stderr"]))
         sha = run(["git","rev-parse","HEAD"], workspace)["stdout"].strip()
         for _ in range(self.s.git_push_retries):
             r = run(["git","push","--set-upstream",self.s.git_remote_name,branch], workspace, env=self._env())
             if r["returncode"] == 0:
                 remote = run(["git","ls-remote",self.s.git_remote_name,f"refs/heads/{branch}"], workspace, env=self._env())["stdout"].split()[0]
-                if remote != sha: raise RuntimeError("remote SHA mismatch")
+                if remote != sha: raise GitPublicationError("remote SHA mismatch")
                 return {"commit_sha": sha, "remote_verified_sha": remote, "branch": branch}
-        raise RuntimeError(redact(r["stderr"]))
+        raise GitPublicationError(redact(r["stderr"]))

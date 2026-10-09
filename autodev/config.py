@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     test_command: str = ""
     git_remote_name: str = "origin"
     git_push_retries: int = 3
+    git_repair_retries: int = 2
     github_token: str = ""
     github_username: str = "x-access-token"
     telegram_bot_token: str = ""

@@ -6,6 +6,7 @@ from typing import Any, TypedDict
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
+from .integrations.git import GitPublicationError
 from .schemas import Job
 
 
@@ -29,7 +30,7 @@ class Orchestrator:
         graph.add_edge("prepare_workspace", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
         graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
-        graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "failure": "terminal_failure"})
+        graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
         graph.add_edge("terminal_success", END)
         graph.add_edge("terminal_failure", END)
@@ -40,7 +41,7 @@ class Orchestrator:
         resume_graph.add_edge(START, "development")
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
         resume_graph.add_edge("terminal_success", END); resume_graph.add_edge("terminal_failure", END)
         self.resume_workflow = resume_graph.compile(checkpointer=self.checkpointer)
@@ -57,6 +58,14 @@ class Orchestrator:
         job = self._job(state); job.status = "preparing"; job.workspace = str((self.s.data_dir / "workspaces" / job.job_id).resolve())
         try:
             job.base_branch, job.working_branch, job.base_sha = self.git.prepare(job.repo_url, Path(job.workspace), job.job_id, job.base_branch or None)
+        except GitPublicationError as exc:
+            job.failure_context = str(exc)
+            if exc.repairable and job.git_repair_count < self.s.git_repair_retries:
+                job.git_repair_count += 1
+                job.failure_history.append("Git publication hygiene failure: " + str(exc))
+                job.final_result = {}
+            else:
+                job.final_result = {"outcome": "failed", "reason": str(exc)}
         except Exception as exc:  # noqa: BLE001
             job.final_result = {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
@@ -124,7 +133,10 @@ class Orchestrator:
         return "development" if job.test_result.get("passed") is False else "publish"
 
     def route_publish(self, state):
-        return "notify" if self._job(state).final_result.get("outcome") in ("completed", "no_changes") else "failure"
+        job = self._job(state)
+        if not job.final_result and job.failure_context.startswith(("secret-like file", "generated artifact")):
+            return "repair"
+        return "notify" if job.final_result.get("outcome") in ("completed", "no_changes") else "failure"
 
     def route_notification(self, state):
         # Delivery status is persisted independently; it must not downgrade publication.

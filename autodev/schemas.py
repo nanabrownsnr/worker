@@ -26,6 +26,7 @@ class Job(BaseModel):
     max_returns: int = 5
     attempt_number: int = 0
     hermes_retry_count: int = 0
+    git_repair_count: int = 0
     created_at: str = Field(default_factory=now)
     updated_at: str = Field(default_factory=now)
     development_result: dict[str, Any] = Field(default_factory=dict)
