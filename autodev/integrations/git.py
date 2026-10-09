@@ -13,8 +13,10 @@ class GitPublicationError(RuntimeError):
 class GitPublisher:
     def __init__(self, settings): self.s = settings
     def _env(self):
-        if not self.s.github_token: return None
-        return {"GITHUB_TOKEN": self.s.github_token, "GIT_ASKPASS": "/app/autodev/integrations/git_askpass.py", "GIT_USERNAME": self.s.github_username}
+        env = {"GIT_AUTHOR_NAME": self.s.git_author_name, "GIT_AUTHOR_EMAIL": self.s.git_author_email, "GIT_COMMITTER_NAME": self.s.git_author_name, "GIT_COMMITTER_EMAIL": self.s.git_author_email}
+        if self.s.github_token:
+            env.update({"GITHUB_TOKEN": self.s.github_token, "GIT_ASKPASS": "/app/autodev/integrations/git_askpass.py", "GIT_USERNAME": self.s.github_username})
+        return env
     @staticmethod
     def _ensure_safe_ignores(workspace: Path):
         path = workspace / ".gitignore"

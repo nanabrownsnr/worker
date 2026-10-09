@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     git_repair_retries: int = 2
     github_token: str = ""
     github_username: str = "x-access-token"
+    git_author_name: str = "Worker"
+    git_author_email: str = "worker@users.noreply.github.com"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_retries: int = 3

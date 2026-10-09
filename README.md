@@ -50,6 +50,8 @@ It mounts the installed Hermes executable/configuration and routes the container
 
 For GitHub publication, set `GITHUB_TOKEN` in `.env` to a fine-grained token scoped only to the target repository with Contents read/write permission. `GITHUB_USERNAME` normally remains `x-access-token`. The token is supplied only to Git clone/push subprocesses through Git askpass and is removed from Hermes's environment; it is never included in repository URLs, logs, checkpoints, or API responses. Do not mount SSH keys or a broad `.gitconfig` into this container because Hermes runs in the same container.
 
+Automated commits use `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` (defaulting to `Worker` and `worker@users.noreply.github.com`). These identify the commit and are separate from GitHub token authentication.
+
 Runtime state and backups
 
 The `./data` directory is intentionally not committed. It contains the SQLite job index, LangGraph checkpoints, redacted logs, and cloned job workspaces. Back it up while the service is stopped:
