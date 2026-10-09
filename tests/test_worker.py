@@ -7,6 +7,7 @@ from autodev.graph import Orchestrator
 from autodev.schemas import Job, JobRequest
 from autodev.service import Service
 from autodev.storage import JobStore
+from autodev.workers.tester import PytestRunner
 
 
 class HermesFake:
@@ -106,3 +107,28 @@ def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
     # avoid asynchronous timing dependency: durable idempotency is still stable
     j=Job(job_id="same",prompt="p",repo_url="https://github.com/o/r.git"); store.put(j); assert svc.submit(JobRequest(job_id="same",prompt="other",repo_url=j.repo_url)).job_id=="same"
+
+def test_tester_detects_uv_and_executes_in_workspace(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n"); (tmp_path / "test_one.py").write_text("def test_ok(): pass\n")
+    seen={}
+    monkeypatch.setattr("autodev.workers.tester.run", lambda args, cwd, timeout: seen.update(args=args, cwd=cwd) or {"returncode":0,"stdout":"1 passed","stderr":"","timed_out":False,"duration":0.1})
+    result=PytestRunner(Settings(test_command="")).test(tmp_path)
+    assert result["command"]==["uv","run","pytest","-q"] and result["passed"] and seen["cwd"]==tmp_path
+
+def test_tester_detects_venv_when_uv_unavailable(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(""); (tmp_path / "test_one.py").write_text(""); (tmp_path / ".venv/bin").mkdir(parents=True); (tmp_path / ".venv/bin/python").touch()
+    monkeypatch.setattr("autodev.workers.tester.shutil.which", lambda name: None)
+    assert PytestRunner(Settings(test_command="")).detect_runner(tmp_path)[0]==[str(tmp_path / ".venv/bin/python"),"-m","pytest","-q"]
+
+def test_tester_detects_node_go_and_rust(tmp_path):
+    (tmp_path / "package.json").write_text('{"scripts":{"test":"jest"}}')
+    runner=PytestRunner(Settings(test_command="")); assert runner.detect_runner(tmp_path)[0]==["npm","test"]
+    (tmp_path / "package.json").unlink(); (tmp_path / "go.mod").write_text("module x"); (tmp_path / "x_test.go").write_text("")
+    assert runner.detect_runner(tmp_path)[0]==["go","test","./..."]
+    (tmp_path / "go.mod").unlink(); (tmp_path / "x_test.go").unlink(); (tmp_path / "Cargo.toml").write_text("[package]\nname='x'\nversion='0.1.0'\n"); (tmp_path / "tests").mkdir()
+    assert runner.detect_runner(tmp_path)[0]==["cargo","test"]
+
+def test_tester_fails_clearly_without_supported_tests(tmp_path):
+    (tmp_path / "README.md").write_text("unsupported")
+    result=PytestRunner(Settings(test_command="")).test(tmp_path)
+    assert not result["passed"] and result["returncode"]==2 and "No supported" in result["summary"]

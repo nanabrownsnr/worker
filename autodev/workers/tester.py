@@ -1,3 +1,5 @@
+import json
+import shutil
 from pathlib import Path
 
 from ..execution import redact, run
@@ -5,12 +7,41 @@ from ..execution import redact, run
 
 class PytestRunner:
     def __init__(self, settings): self.s = settings
+
+    @staticmethod
+    def _has_python_tests(workspace):
+        return any(p.is_file() for p in workspace.rglob("test_*.py")) or any(p.is_file() for p in workspace.rglob("*_test.py"))
+
+    @staticmethod
+    def _has_go_tests(workspace): return any(p.is_file() for p in workspace.rglob("*_test.go"))
+    @staticmethod
+    def _has_rust_tests(workspace): return (workspace / "tests").is_dir() or any(p.is_file() for p in workspace.rglob("*.rs"))
+
+    def detect_runner(self, workspace: Path):
+        if self.s.test_command: return self.s.test_command.split(), "override", "configured TEST_COMMAND"
+        python_project = (workspace / "uv.lock").exists() or (workspace / "pyproject.toml").exists()
+        if python_project and self._has_python_tests(workspace):
+            if shutil.which("uv"): return ["uv", "run", "pytest", "-q"], "python-uv", "Python project with pytest files"
+            if (workspace / ".venv/bin/python").exists(): return [str(workspace / ".venv/bin/python"), "-m", "pytest", "-q"], "python-venv", "Python project with .venv and pytest files"
+            return None, "python", "Python tests found but neither uv nor .venv/bin/python is available"
+        if (workspace / "package.json").exists():
+            try: package = json.loads((workspace / "package.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError): package = {}
+            if package.get("scripts", {}).get("test"): return ["npm", "test"], "node", "package.json test script"
+        if (workspace / "go.mod").exists() and self._has_go_tests(workspace): return ["go", "test", "./..."], "go", "go.mod with Go test files"
+        if (workspace / "Cargo.toml").exists() and self._has_rust_tests(workspace): return ["cargo", "test"], "rust", "Cargo.toml with Rust test sources"
+        if python_project: return None, "python", "Python project found but no pytest test files were found"
+        if (workspace / "package.json").exists(): return None, "node", "package.json has no test script"
+        if (workspace / "go.mod").exists(): return None, "go", "go.mod found but no *_test.go files were found"
+        if (workspace / "Cargo.toml").exists(): return None, "rust", "Cargo.toml found but no Rust test sources were found"
+        return None, "unsupported", "No supported test framework or test files found"
+
     def test(self, workspace: Path):
-        if self.s.test_command: args = self.s.test_command.split()
-        elif (workspace / "uv.lock").exists() or (workspace / "pyproject.toml").exists(): args = ["uv", "run", "pytest", "-q"]
-        elif (workspace / ".venv/bin/python").exists(): args = [str(workspace / ".venv/bin/python"), "-m", "pytest", "-q"]
-        else: return {"command": [], "returncode": 2, "passed": False, "summary": "No Python project environment detected", "collected": False}
+        args, framework, detection = self.detect_runner(workspace)
+        if args is None:
+            return {"command": [], "framework": framework, "returncode": 2, "passed": False, "summary": detection, "stdout": "", "stderr": detection, "collected": False, "timed_out": False}
         r = run(args, cwd=workspace, timeout=self.s.test_timeout_seconds)
-        output = redact(r["stdout"] + "\n" + r["stderr"])
-        collected = "collected" in output or " passed" in output or " failed" in output
-        return {"command": args, "returncode": r["returncode"], "passed": r["returncode"] == 0 and collected and not r["timed_out"], "summary": output[-6000:], "collected": collected, "timed_out": r["timed_out"], "duration": r["duration"]}
+        stdout, stderr = redact(r["stdout"]), redact(r["stderr"])
+        output = stdout + "\n" + stderr
+        collected = "collected" in output or " passed" in output or " failed" in output or framework in ("node", "go", "rust", "override")
+        return {"command": args, "framework": framework, "detection": detection, "returncode": r["returncode"], "passed": r["returncode"] == 0 and collected and not r["timed_out"], "summary": output[-6000:], "stdout": stdout[-6000:], "stderr": stderr[-6000:], "collected": collected, "timed_out": r["timed_out"], "duration": r["duration"]}
