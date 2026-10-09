@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock README.md .env.example ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY autodev ./autodev
 RUN mkdir -p /var/lib/worker/data /home/nbrown /tmp/uv-cache && chown -R 1001:1003 /var/lib/worker /home/nbrown /tmp/uv-cache /app
+RUN chmod 0755 /app/autodev/integrations/git_askpass.py
 
 ENV AUTODEV_BIND_HOST=0.0.0.0 \
     AUTODEV_PORT=8000 \

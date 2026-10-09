@@ -48,6 +48,8 @@ The Docker Compose setup keeps SQLite, LangGraph checkpoints, logs, and workspac
 Run: docker compose up -d --build, docker compose logs -f worker, docker compose stop, and docker compose start.
 It mounts the installed Hermes executable/configuration and routes the container to the host model endpoint through host.docker.internal:8000.
 
+For GitHub publication, set `GITHUB_TOKEN` in `.env` to a fine-grained token scoped only to the target repository with Contents read/write permission. `GITHUB_USERNAME` normally remains `x-access-token`. The token is supplied only to Git clone/push subprocesses through Git askpass and is removed from Hermes's environment; it is never included in repository URLs, logs, checkpoints, or API responses. Do not mount SSH keys or a broad `.gitconfig` into this container because Hermes runs in the same container.
+
 Runtime state and backups
 
 The `./data` directory is intentionally not committed. It contains the SQLite job index, LangGraph checkpoints, redacted logs, and cloned job workspaces. Back it up while the service is stopped:

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     test_command: str = ""
     git_remote_name: str = "origin"
     git_push_retries: int = 3
+    github_token: str = ""
+    github_username: str = "x-access-token"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_retries: int = 3

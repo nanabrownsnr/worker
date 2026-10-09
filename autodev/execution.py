@@ -12,6 +12,9 @@ def redact(text: str, extra=()) -> str:
 
 def run(args, cwd: Path | None = None, timeout=900, env=None, log_path: Path | None = None):
     started = time.monotonic(); merged = os.environ.copy(); merged.update(env or {})
+    for key, value in (env or {}).items():
+        if value is None:
+            merged.pop(key, None)
     merged["GIT_TERMINAL_PROMPT"] = "0"
     try:
         p = subprocess.run(args, cwd=cwd, env=merged, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, start_new_session=True, check=False)
