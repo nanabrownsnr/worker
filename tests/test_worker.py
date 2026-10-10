@@ -138,6 +138,7 @@ def test_startup_reconciles_interrupted_jobs_for_resume(tmp_path):
     assert job.status=="failed" and job.final_result["interrupted"] is True
     child=svc.resume("interrupted")
     assert child.parent_job_id=="interrupted"
+    assert svc.wait_for_idle()
 
 def test_tester_detects_uv_and_executes_in_workspace(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n"); (tmp_path / "test_one.py").write_text("def test_ok(): pass\n")

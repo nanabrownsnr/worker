@@ -1,11 +1,21 @@
 import threading
+import time
 import uuid
 
 from .schemas import Job, JobRequest
 
 
 class Service:
-    def __init__(self, settings, store, orchestrator): self.s,self.store,self.orch=settings,store,orchestrator; self.lock=threading.Lock(); self.workspace_locks=set(); self.active=False
+    def __init__(self, settings, store, orchestrator): self.s,self.store,self.orch=settings,store,orchestrator; self.lock=threading.Lock(); self.workspace_locks=set(); self.threads=set(); self.active=False
+
+    def wait_for_idle(self, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.lock:
+                threads = list(self.threads)
+            if not threads: return True
+            for thread in threads: thread.join(max(0, deadline - time.monotonic()))
+        return not self.threads
     def reconcile_interrupted(self):
         """Convert work that died with the process into an explicit resumable failure."""
         for job in self.store.all_nonterminal():
@@ -27,8 +37,10 @@ class Service:
             with self.lock:
                 self.active=True
                 try: self.orch.run(job)
-                finally: self.active=False
-        threading.Thread(target=work,daemon=True).start(); return job
+                finally:
+                    self.active=False
+                    self.threads.discard(threading.current_thread())
+        thread = threading.Thread(target=work,daemon=True); self.threads.add(thread); thread.start(); return job
 
     def resume(self, job_id: str):
         original = self.store.get(job_id)
@@ -48,4 +60,5 @@ class Service:
                 with self.lock:
                     self.active=False
                     self.workspace_locks.discard(child.workspace)
-        threading.Thread(target=work,daemon=True).start(); return child
+                    self.threads.discard(threading.current_thread())
+        thread = threading.Thread(target=work,daemon=True); self.threads.add(thread); thread.start(); return child
