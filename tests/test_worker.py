@@ -8,6 +8,7 @@ from autodev.integrations.git import GitPublicationError, GitPublisher
 from autodev.schemas import Job, JobRequest
 from autodev.service import Service
 from autodev.storage import JobStore
+from autodev.workers.deployment import DeploymentGate
 from autodev.workers.tester import PytestRunner
 
 
@@ -162,3 +163,23 @@ def test_tester_fails_clearly_without_supported_tests(tmp_path):
     (tmp_path / "README.md").write_text("unsupported")
     result=PytestRunner(Settings(test_command="")).test(tmp_path)
     assert not result["passed"] and result["returncode"]==2 and "No supported" in result["summary"]
+
+def test_deployment_env_is_protected_and_not_public(tmp_path):
+    _, store, svc, _, _, _, _ = setup(tmp_path)
+    job = svc.submit(JobRequest(prompt="run", repo_url="https://github.com/o/r.git", deployment_env="TOKEN=do-not-leak\nPORT=8000"))
+    saved = store.get(job.job_id)
+    assert saved.deployment_env_path and Path(saved.deployment_env_path).read_text() == "TOKEN=do-not-leak\nPORT=8000"
+    assert Path(saved.deployment_env_path).stat().st_mode & 0o777 == 0o600
+    assert "do-not-leak" not in str(saved.public_dict(detail=True))
+
+def test_deployment_gate_skips_non_docker_workspace(tmp_path):
+    result = DeploymentGate(Settings(data_dir=tmp_path)).run(tmp_path)
+    assert result["passed"] and result["skipped"]
+
+def test_hermes_prompt_contains_worker_instructions_without_secrets(tmp_path, monkeypatch):
+    from autodev.workers.hermes import Hermes
+    seen = {}
+    monkeypatch.setattr("autodev.workers.hermes.run", lambda args, cwd, timeout, env, log_path: seen.update(args=args) or {"returncode": 0, "stdout": "", "stderr": "", "timed_out": False, "duration": 0})
+    Hermes(Settings(data_dir=tmp_path)).develop("build feature", tmp_path)
+    instruction = seen["args"][seen["args"].index("-z") + 1]
+    assert "existing repository" in instruction and "build feature" in instruction

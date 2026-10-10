@@ -17,30 +17,34 @@ class WorkerState(TypedDict):
 class Orchestrator:
     """LangGraph workflow with durable SQLite checkpoints per job thread."""
 
-    def __init__(self, settings, store, hermes, tester, git, telegram):
+    def __init__(self, settings, store, hermes, tester, git, telegram, deployment=None):
         self.s, self.store = settings, store
         self.hermes, self.tester, self.git, self.telegram = hermes, tester, git, telegram
+        from .workers.deployment import DeploymentGate
+        self.deployment = deployment or DeploymentGate(settings)
         self.s.data_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = sqlite3.connect(self.s.data_dir / "checkpoints.sqlite", check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
         graph = StateGraph(WorkerState)
-        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             graph.add_node(name, node)
         graph.add_edge(START, "prepare_workspace")
         graph.add_edge("prepare_workspace", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
+        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
         graph.add_edge("terminal_success", END)
         graph.add_edge("terminal_failure", END)
         self.workflow = graph.compile(checkpointer=self.checkpointer)
         resume_graph = StateGraph(WorkerState)
-        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             resume_graph.add_node(name, node)
         resume_graph.add_edge(START, "development")
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
         resume_graph.add_edge("terminal_success", END); resume_graph.add_edge("terminal_failure", END)
@@ -114,6 +118,19 @@ class Orchestrator:
             job.final_result = {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
 
+    def deployment_validation(self, state):
+        job = self._job(state)
+        if job.final_result: return self._save(job)
+        result = self.deployment.run(Path(job.workspace), job.deployment_env_path) if self.s.deployment_gate_enabled else {"passed": True, "skipped": True, "summary": "Deployment gate disabled"}
+        job.deployment_result = result
+        if not result.get("passed"):
+            job.deployment_retry_count += 1
+            job.failure_context = "Deployment validation failed: " + result.get("summary", "unknown failure")
+            job.failure_history.append(job.failure_context)
+            if job.deployment_retry_count > self.s.deployment_retries:
+                job.final_result = {"outcome": "failed", "reason": job.failure_context}
+        return self._save(job)
+
     def telegram_notification(self, state):
         job = self._job(state); job.status = "notifying"; outcome = job.final_result.get("outcome", "failed")
         test = job.test_result
@@ -137,8 +154,13 @@ class Orchestrator:
 
     def route_test(self, state):
         job = self._job(state)
-        if job.final_result: return "failure" if job.final_result.get("outcome") == "failed" else "publish"
-        return "development" if job.test_result.get("passed") is False else "publish"
+        if job.final_result: return "failure"
+        return "development" if job.test_result.get("passed") is False else "deploy"
+
+    def route_deployment(self, state):
+        job = self._job(state)
+        if job.final_result: return "failure"
+        return "publish" if job.deployment_result.get("passed") else "development"
 
     def route_publish(self, state):
         job = self._job(state)

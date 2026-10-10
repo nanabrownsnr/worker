@@ -4,6 +4,8 @@ Worker is a persistent, single-worker coding service. It accepts an unrestricted
 
 The five-return limit counts failed independent validations. The fifth failed validation is terminal; it does not start a sixth development attempt. No Render deployment, coverage enforcement, frontier escalation, or parallel jobs are implemented.
 
+If a job includes `deployment_env`, Worker stores the supplied `.env` content in a protected file outside the checkout and uses it only for local Docker/Compose validation. It is never sent to Hermes, persisted in graph state, returned by the API, logged, or committed. Docker repositories must build, start, complete their configured smoke run, and produce no configured fatal log patterns before publication. Deployment repair attempts are separate from the five pytest returns.
+
 The independent tester selects a runner deterministically: `TEST_COMMAND` overrides detection; otherwise it uses `uv run pytest -q` for Python projects with pytest files, `.venv/bin/python -m pytest` when uv is unavailable, `npm test` when `package.json` defines a test script, `go test ./...` for Go test files, or `cargo test` for Rust test sources. Unsupported projects or projects without detectable tests fail validation explicitly.
 
 ## Install on Ubuntu

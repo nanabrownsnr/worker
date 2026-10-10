@@ -11,6 +11,7 @@ class JobRequest(BaseModel):
     repo_url: str = Field(min_length=1)
     job_id: str | None = None
     base_branch: str | None = None
+    deployment_env: str | None = None
 
 class Job(BaseModel):
     job_id: str
@@ -38,6 +39,9 @@ class Job(BaseModel):
     published_branch: str = ""
     notification_status: dict[str, Any] = Field(default_factory=dict)
     final_result: dict[str, Any] = Field(default_factory=dict)
+    deployment_env_path: str = ""
+    deployment_result: dict[str, Any] = Field(default_factory=dict)
+    deployment_retry_count: int = 0
 
     def public_dict(self, *, detail: bool = False) -> dict[str, Any]:
         """Return a bounded API representation without the original prompt or raw logs."""
@@ -50,7 +54,8 @@ class Job(BaseModel):
             "created_at": self.created_at, "updated_at": self.updated_at,
             "commit_sha": self.commit_sha, "remote_verified_sha": self.remote_verified_sha,
             "published_branch": self.published_branch, "notification_status": self.notification_status,
-            "final_result": self.final_result,
+            "final_result": self.final_result, "deployment_env_provided": bool(self.deployment_env_path),
+            "deployment_result": {k: self.deployment_result.get(k) for k in ("passed", "skipped", "summary", "returncode", "timed_out", "duration") if k in self.deployment_result},
         }
         if detail:
             result["test_result"] = {k: self.test_result.get(k) for k in ("command", "framework", "returncode", "passed", "summary", "collected", "timed_out", "duration") if k in self.test_result}

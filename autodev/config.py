@@ -29,3 +29,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_retries: int = 3
+    deployment_gate_enabled: bool = True
+    deployment_timeout_seconds: int = 300
+    deployment_retries: int = 2
+    deployment_log_patterns: str = "traceback,exception,error:"

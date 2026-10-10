@@ -18,7 +18,12 @@ class Hermes:
         except OSError: return False
 
     def develop(self, prompt, workspace: Path, feedback=""):
-        instruction = prompt
+        instruction = ("You are Worker's software-development coding agent. Inspect the existing repository before changing it. "
+                       "Implement the user's task completely, preserve compatible existing behavior, update dependencies carefully, "
+                       "add or update meaningful tests, and run the project's relevant tests and build checks. "
+                       "Work only inside the supplied workspace. Do not commit, push, deploy, send notifications, or access unrelated repositories or secrets. "
+                       "If this is an existing project, update its current implementation rather than replacing it with a scaffold.\n\n"
+                       "USER TASK:\n" + prompt)
         if feedback:
             instruction += "\n\nRecovery context. Continue the existing implementation in this workspace; do not restart or discard uncommitted changes.\n" + feedback
         args = [self.s.hermes_command, "--provider", self.s.hermes_provider, "-m", self.s.hermes_model, "-z", instruction, "--in", str(workspace), "--yolo"]

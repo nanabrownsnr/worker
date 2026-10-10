@@ -21,7 +21,7 @@ def create_app(settings=None, service=None):
         service.reconcile_interrupted()
     mcp=FastMCP("Worker")
     @mcp.tool()
-    def submit_job(prompt: str, repo_url: str): return service.submit(JobRequest(prompt=prompt,repo_url=repo_url)).public_dict()
+    def submit_job(prompt: str, repo_url: str, deployment_env: str | None = None): return service.submit(JobRequest(prompt=prompt,repo_url=repo_url,deployment_env=deployment_env)).public_dict()
     @mcp.tool()
     def get_job_status(job_id: str):
         j=store.get(job_id); return j.public_dict(detail=True) if j else {"error":"not found"}

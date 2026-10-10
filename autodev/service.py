@@ -18,6 +18,10 @@ class Service:
     def submit(self, req: JobRequest):
         if req.job_id and self.store.get(req.job_id): return self.store.get(req.job_id)
         job=Job(job_id=req.job_id or uuid.uuid4().hex, prompt=req.prompt, repo_url=req.repo_url, max_returns=self.s.max_returns, base_branch=req.base_branch or "")
+        if req.deployment_env is not None:
+            env_dir = self.s.data_dir / "deployment-env"; env_dir.mkdir(parents=True, exist_ok=True)
+            path = env_dir / f"{job.job_id}.env"; path.write_text(req.deployment_env, encoding="utf-8"); path.chmod(0o600)
+            job.deployment_env_path = str(path)
         self.store.put(job)
         def work():
             with self.lock:
