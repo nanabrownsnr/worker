@@ -17,21 +17,24 @@ class WorkerState(TypedDict):
 class Orchestrator:
     """LangGraph workflow with durable SQLite checkpoints per job thread."""
 
-    def __init__(self, settings, store, hermes, tester, git, telegram, deployment=None):
+    def __init__(self, settings, store, hermes, tester, git, telegram, deployment=None, triage=None):
         self.s, self.store = settings, store
         self.hermes, self.tester, self.git, self.telegram = hermes, tester, git, telegram
         from .workers.deployment import DeploymentGate
         self.deployment = deployment or DeploymentGate(settings)
+        from .workers.triage import FailureTriage
+        self.triage = triage or FailureTriage()
         self.s.data_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = sqlite3.connect(self.s.data_dir / "checkpoints.sqlite", check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
         graph = StateGraph(WorkerState)
-        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             graph.add_node(name, node)
         graph.add_edge(START, "prepare_workspace")
         graph.add_edge("prepare_workspace", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_conditional_edges("independent_testing", self.route_test, {"triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_edge("failure_triage", "development")
         graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
@@ -39,11 +42,12 @@ class Orchestrator:
         graph.add_edge("terminal_failure", END)
         self.workflow = graph.compile(checkpointer=self.checkpointer)
         resume_graph = StateGraph(WorkerState)
-        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             resume_graph.add_node(name, node)
         resume_graph.add_edge(START, "development")
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_edge("failure_triage", "development")
         resume_graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
@@ -102,6 +106,18 @@ class Orchestrator:
             if job.return_count >= job.max_returns: job.final_result = {"outcome": "failed", "reason": "maximum validation returns reached"}
         return self._save(job)
 
+    def failure_triage(self, state):
+        job = self._job(state)
+        if job.final_result:
+            return self._save(job)
+        job.triage_result = self.triage.classify(job, job.test_result) if self.s.triage_enabled else {"classification": "disabled"}
+        diagnosis = job.triage_result
+        job.failure_context = (job.failure_context + "\nTriage diagnosis: " + diagnosis.get("classification", "unknown") +
+                               "\nReason: " + diagnosis.get("reason", "") +
+                               "\nRecommended action: " + diagnosis.get("recommended_action", ""))[-8000:]
+        job.failure_history.append("Triage: " + diagnosis.get("classification", "unknown"))
+        return self._save(job)
+
     def github_publication(self, state):
         job = self._job(state); job.status = "publishing"
         try:
@@ -155,7 +171,7 @@ class Orchestrator:
     def route_test(self, state):
         job = self._job(state)
         if job.final_result: return "failure"
-        return "development" if job.test_result.get("passed") is False else "deploy"
+        return "triage" if job.test_result.get("passed") is False else "deploy"
 
     def route_deployment(self, state):
         job = self._job(state)

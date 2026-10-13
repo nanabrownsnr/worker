@@ -33,3 +33,4 @@ class Settings(BaseSettings):
     deployment_timeout_seconds: int = 300
     deployment_retries: int = 2
     deployment_log_patterns: str = "traceback,exception,error:"
+    triage_enabled: bool = True

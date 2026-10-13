@@ -42,6 +42,7 @@ class Job(BaseModel):
     deployment_env_path: str = ""
     deployment_result: dict[str, Any] = Field(default_factory=dict)
     deployment_retry_count: int = 0
+    triage_result: dict[str, Any] = Field(default_factory=dict)
 
     def public_dict(self, *, detail: bool = False) -> dict[str, Any]:
         """Return a bounded API representation without the original prompt or raw logs."""

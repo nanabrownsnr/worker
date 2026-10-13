@@ -25,7 +25,7 @@ class Hermes:
                        "If this is an existing project, update its current implementation rather than replacing it with a scaffold.\n\n"
                        "USER TASK:\n" + prompt)
         if feedback:
-            instruction += "\n\nRecovery context. Continue the existing implementation in this workspace; do not restart or discard uncommitted changes.\n" + feedback
+            instruction += "\n\nRecovery context. Continue the existing implementation in this workspace; do not restart or discard uncommitted changes. Tests are evidence, not unquestionable truth; verify framework behavior before changing production code.\n" + feedback
         args = [self.s.hermes_command, "--provider", self.s.hermes_provider, "-m", self.s.hermes_model, "-z", instruction, "--in", str(workspace), "--yolo"]
         log_dir = self.s.data_dir / "logs" / workspace.name
         log_dir.mkdir(parents=True, exist_ok=True)

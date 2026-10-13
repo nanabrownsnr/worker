@@ -47,7 +47,7 @@ def test_five_returns_terminal_without_publish(tmp_path):
 
 def test_failure_then_repair(tmp_path):
     _,_,svc,h,_,_,_=setup(tmp_path,tester=TesterFake([False,True])); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
-    out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and h.calls[1][2]=="failure"
+    out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and "Triage diagnosis" in h.calls[1][2]
 
 def test_git_hygiene_failure_returns_to_hermes(tmp_path):
     class HygieneGit(GitFake):
@@ -127,7 +127,7 @@ def test_resume_rejects_second_active_execution(tmp_path):
 def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
     # avoid asynchronous timing dependency: durable idempotency is still stable
-    j=Job(job_id="same",prompt="p",repo_url="https://github.com/o/r.git"); store.put(j); assert svc.submit(JobRequest(job_id="same",prompt="other",repo_url=j.repo_url)).job_id=="same"
+    j=Job(job_id="same",prompt="p",repo_url="https://github.com/o/r.git"); store.put(j); assert svc.submit(JobRequest(job_id="same",prompt="other",repo_url=j.repo_url)).job_id=="same"; assert svc.wait_for_idle()
 
 def test_startup_reconciles_interrupted_jobs_for_resume(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
