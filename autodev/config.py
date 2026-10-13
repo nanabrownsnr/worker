@@ -34,3 +34,5 @@ class Settings(BaseSettings):
     deployment_retries: int = 2
     deployment_log_patterns: str = "traceback,exception,error:"
     triage_enabled: bool = True
+    triage_model: str = "glm-4.7-flash:latest"
+    triage_timeout_seconds: int = 90

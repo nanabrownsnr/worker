@@ -23,7 +23,7 @@ class Orchestrator:
         from .workers.deployment import DeploymentGate
         self.deployment = deployment or DeploymentGate(settings)
         from .workers.triage import FailureTriage
-        self.triage = triage or FailureTriage()
+        self.triage = triage or FailureTriage(settings)
         self.s.data_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = sqlite3.connect(self.s.data_dir / "checkpoints.sqlite", check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
@@ -33,7 +33,7 @@ class Orchestrator:
         graph.add_edge(START, "prepare_workspace")
         graph.add_edge("prepare_workspace", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        graph.add_conditional_edges("independent_testing", self.route_test, {"triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
         graph.add_edge("failure_triage", "development")
         graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
@@ -46,7 +46,7 @@ class Orchestrator:
             resume_graph.add_node(name, node)
         resume_graph.add_edge(START, "development")
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
         resume_graph.add_edge("failure_triage", "development")
         resume_graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
@@ -171,7 +171,9 @@ class Orchestrator:
     def route_test(self, state):
         job = self._job(state)
         if job.final_result: return "failure"
-        return "triage" if job.test_result.get("passed") is False else "deploy"
+        if job.test_result.get("passed") is False:
+            return "triage" if job.return_count >= 2 else "development"
+        return "deploy"
 
     def route_deployment(self, state):
         job = self._job(state)

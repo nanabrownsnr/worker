@@ -33,7 +33,7 @@ class HermesSequence:
     def endpoint_reachable(self): return True
 
 def setup(tmp_path, hermes=None, tester=None):
-    s=Settings(data_dir=tmp_path)
+    s=Settings(data_dir=tmp_path, triage_enabled=False)
     store=JobStore(tmp_path/"jobs.sqlite"); h=hermes or HermesFake(); t=tester or TesterFake([True]); g=GitFake(); n=TelegramFake()
     return s,store,Service(s,store,Orchestrator(s,store,h,t,g,n)),h,t,g,n
 
@@ -47,7 +47,7 @@ def test_five_returns_terminal_without_publish(tmp_path):
 
 def test_failure_then_repair(tmp_path):
     _,_,svc,h,_,_,_=setup(tmp_path,tester=TesterFake([False,True])); j=Job(job_id="j",prompt="p",repo_url="https://github.com/o/r.git")
-    out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and "Triage diagnosis" in h.calls[1][2]
+    out=svc.orch.run(j); assert out.status=="completed" and len(h.calls)==2 and h.calls[1][2]=="failure"
 
 def test_git_hygiene_failure_returns_to_hermes(tmp_path):
     class HygieneGit(GitFake):
