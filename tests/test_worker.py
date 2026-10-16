@@ -1,3 +1,4 @@
+import sys
 import time
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from autodev.workers.tester import PytestRunner
 
 class HermesFake:
     def __init__(self, outcomes=None): self.outcomes=iter(outcomes or [0] * 10); self.calls=[]
-    def develop(self,prompt,workspace,feedback=""): self.calls.append((prompt,workspace,feedback)); return {"returncode":next(self.outcomes),"stdout":"","stderr":""}
+    def develop(self,prompt,workspace,feedback="",model=None): self.calls.append((prompt,workspace,feedback)); return {"returncode":next(self.outcomes),"stdout":"","stderr":""}
 class TesterFake:
     def __init__(self, outcomes): self.outcomes=iter(outcomes); self.calls=0
     def test(self,workspace): self.calls+=1; return {"passed":next(self.outcomes),"summary":"failure" if self.calls else "","returncode":0}
@@ -33,7 +34,7 @@ class HermesSequence:
     def endpoint_reachable(self): return True
 
 def setup(tmp_path, hermes=None, tester=None):
-    s=Settings(data_dir=tmp_path, triage_enabled=False)
+    s=Settings(data_dir=tmp_path, triage_enabled=False, deployment_gate_enabled=False)
     store=JobStore(tmp_path/"jobs.sqlite"); h=hermes or HermesFake(); t=tester or TesterFake([True]); g=GitFake(); n=TelegramFake()
     return s,store,Service(s,store,Orchestrator(s,store,h,t,g,n)),h,t,g,n
 
@@ -106,6 +107,17 @@ def test_resume_links_child_and_preserves_workspace(tmp_path):
     assert child.parent_job_id=="failed" and store.get("failed").final_result=={}
     assert store.get(child.job_id).workspace==str(workspace) and marker.read_text()=="keep"
 
+def test_resume_inherits_evidence_and_routes_past_hermes(tmp_path):
+    _, store, svc, _, _, _, _ = setup(tmp_path)
+    workspace = tmp_path / "existing"; workspace.mkdir()
+    original = Job(job_id="validated", prompt="p", repo_url="https://github.com/o/r.git", workspace=str(workspace), status="failed", test_result={"passed": True}, deployment_result={"passed": False}, development_result={"returncode": 0})
+    store.put(original)
+    child = svc.resume("validated")
+    assert child.test_result["passed"] is True and child.deployment_result["passed"] is False
+    assert svc.orch.route_resume({"job": child.model_dump()}) == "deployment"
+    assert child.attempt_number == 0
+    svc.wait_for_idle()
+
 def test_resume_rejects_nonterminal_or_missing_workspace(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
     store.put(Job(job_id="queued",prompt="p",repo_url="https://github.com/o/r.git",status="queued"))
@@ -123,6 +135,18 @@ def test_resume_rejects_second_active_execution(tmp_path):
     try: svc.resume("failed"); assert False
     except ValueError as exc: assert "active execution" in str(exc)
     assert first.parent_job_id=="failed"
+
+def test_resume_environment_overrides_parent_only_when_supplied(tmp_path):
+    _, store, svc, _, _, _, _ = setup(tmp_path)
+    workspace = tmp_path / "existing"; workspace.mkdir()
+    parent_env = tmp_path / "parent.env"; parent_env.write_text("OLD=value\n"); parent_env.chmod(0o600)
+    store.put(Job(job_id="failed", prompt="p", repo_url="https://github.com/o/r.git", workspace=str(workspace), status="failed", deployment_env_path=str(parent_env)))
+    inherited = svc.resume("failed")
+    assert inherited.deployment_env_path == str(parent_env)
+    svc.wait_for_idle()
+    overridden = svc.resume("failed", {"NEW": "value"})
+    assert overridden.deployment_env_path != str(parent_env)
+    assert Path(overridden.deployment_env_path).read_text() == "NEW=value\n"
 
 def test_submission_accepts_repo_and_is_idempotent(tmp_path):
     _,store,svc,_,_,_,_=setup(tmp_path)
@@ -147,6 +171,13 @@ def test_tester_detects_uv_and_executes_in_workspace(tmp_path, monkeypatch):
     result=PytestRunner(Settings(test_command="")).test(tmp_path)
     assert result["command"]==["uv","run","pytest","-q"] and result["passed"] and seen["cwd"]==tmp_path
 
+def test_tester_detects_python_requirements_project(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("pytest\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_api.py").write_text("def test_ok(): pass\n")
+    monkeypatch.setattr("autodev.workers.tester.shutil.which", lambda name: None)
+    assert PytestRunner(Settings(test_command="")).detect_runner(tmp_path)[0] == [sys.executable, "-m", "pytest", "-q"]
+
 def test_tester_detects_venv_when_uv_unavailable(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(""); (tmp_path / "test_one.py").write_text(""); (tmp_path / ".venv/bin").mkdir(parents=True); (tmp_path / ".venv/bin/python").touch()
     monkeypatch.setattr("autodev.workers.tester.shutil.which", lambda name: None)
@@ -167,15 +198,30 @@ def test_tester_fails_clearly_without_supported_tests(tmp_path):
 
 def test_deployment_env_is_protected_and_not_public(tmp_path):
     _, store, svc, _, _, _, _ = setup(tmp_path)
-    job = svc.submit(JobRequest(prompt="run", repo_url="https://github.com/o/r.git", deployment_env="TOKEN=do-not-leak\nPORT=8000"))
+    job = svc.submit(JobRequest(prompt="run", repo_url="https://github.com/o/r.git", deployment_env={"TOKEN":"do-not-leak", "PORT":"8000"}))
     saved = store.get(job.job_id)
-    assert saved.deployment_env_path and Path(saved.deployment_env_path).read_text() == "TOKEN=do-not-leak\nPORT=8000"
+    assert saved.deployment_env_path and Path(saved.deployment_env_path).read_text() == "PORT=8000\nTOKEN=do-not-leak\n"
     assert Path(saved.deployment_env_path).stat().st_mode & 0o777 == 0o600
     assert "do-not-leak" not in str(saved.public_dict(detail=True))
 
-def test_deployment_gate_skips_non_docker_workspace(tmp_path):
+def test_deployment_env_requires_structured_safe_values():
+    request = JobRequest(prompt="run", repo_url="https://github.com/o/r.git", deployment_env={"KEY":"value"})
+    assert request.deployment_env == {"KEY": "value"}
+    for value in ({"BAD-NAME": "x"}, {"KEY": "line1\nline2"}):
+        try:
+            JobRequest(prompt="run", repo_url="https://github.com/o/r.git", deployment_env=value)
+            assert False
+        except ValueError:
+            pass
+
+def test_deployment_gate_fails_non_docker_workspace(tmp_path):
     result = DeploymentGate(Settings(data_dir=tmp_path)).run(tmp_path)
-    assert result["passed"] and result["skipped"]
+    assert not result["passed"] and not result["skipped"] and "no Dockerfile" in result["summary"]
+
+def test_deployment_port_allocator_supports_compose_port_forms(tmp_path):
+    gate = DeploymentGate(Settings(data_dir=tmp_path, deployment_port_start=18003, deployment_port_end=18005))
+    assert gate._available_ports(3) == [18003, 18004, 18005]
+    assert gate._available_ports(4) is None
 
 def test_hermes_prompt_contains_worker_instructions_without_secrets(tmp_path, monkeypatch):
     from autodev.workers.hermes import Hermes
@@ -184,3 +230,19 @@ def test_hermes_prompt_contains_worker_instructions_without_secrets(tmp_path, mo
     Hermes(Settings(data_dir=tmp_path)).develop("build feature", tmp_path)
     instruction = seen["args"][seen["args"].index("-z") + 1]
     assert "existing repository" in instruction and "build feature" in instruction
+
+def test_incremental_development_rejects_hermes_noop(tmp_path):
+    class NoopHermes(HermesFake):
+        def develop(self, prompt, workspace, feedback="", model=None):
+            return {"returncode": 0, "stdout": "<function calls>", "stderr": ""}
+    _, _, svc, _, _, _, _ = setup(tmp_path, hermes=NoopHermes())
+    job = Job(job_id="incremental-noop", prompt="build", repo_url="https://github.com/o/r.git", workflow_mode="incremental")
+    out = svc.orch.run(job)
+    assert out.status == "failed" and out.development_result["classification"] == "no_meaningful_work"
+
+def test_incremental_plan_has_ticket_acceptance_criteria(tmp_path):
+    s, _, svc, _, _, _, _ = setup(tmp_path)
+    s.hermes_endpoint = ""
+    job = Job(job_id="plan", prompt="build a service", repo_url="https://github.com/o/r.git", workflow_mode="incremental")
+    planned = svc.orch.plan_project({"job": job.model_dump()})
+    assert planned["job"]["project_plan"] and planned["job"]["project_plan"][0]["acceptance_criteria"]

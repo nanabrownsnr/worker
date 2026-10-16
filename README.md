@@ -1,16 +1,18 @@
 # Worker
 
-Worker is a persistent, single-worker coding service. It accepts an unrestricted prompt and an approved existing GitHub repository, gives the task to a headless Hermes process, independently runs pytest, routes up to five failed validations back to Hermes, then publishes a dedicated branch and notifies Telegram.
+Worker is a persistent, single-worker coding service. It accepts an unrestricted prompt and an existing GitHub repository, gives the task to the configured headless coding backend (OpenCode, Aider, or Hermes), independently validates it, routes failed validations back to development, then publishes a dedicated branch and notifies Telegram.
 
 The five-return limit counts failed independent validations. The fifth failed validation is terminal; it does not start a sixth development attempt. No Render deployment, coverage enforcement, frontier escalation, or parallel jobs are implemented.
 
-If a job includes `deployment_env`, Worker stores the supplied `.env` content in a protected file outside the checkout and uses it only for local Docker/Compose validation. It is never sent to Hermes, persisted in graph state, returned by the API, logged, or committed. Docker repositories must build, start, complete their configured smoke run, and produce no configured fatal log patterns before publication. Deployment repair attempts are separate from the five pytest returns.
+If a job includes `deployment_env`, provide it as a JSON object of environment variable names to values, for example `{"MONGODB_URI":"mongodb://mongodb:27017/twynity_mcp","ENCRYPTION_KEY":"..."}`. Worker writes that mapping to a protected temporary `.env` file outside the checkout and uses it only for local Docker/Compose validation. It is never sent to Hermes, persisted in graph state, returned by the API, logged, or committed. Docker repositories must build, start, complete their configured smoke run, and produce no configured fatal log patterns before publication. Deployment repair attempts are separate from the five pytest returns.
+
+`POST /jobs/{job_id}/resume` may include the same `deployment_env` object. If omitted, the child inherits the parent job's saved environment; if supplied, it overrides it for that child only.
 
 The independent tester selects a runner deterministically: `TEST_COMMAND` overrides detection; otherwise it uses `uv run pytest -q` for Python projects with pytest files, `.venv/bin/python -m pytest` when uv is unavailable, `npm test` when `package.json` defines a test script, `go test ./...` for Go test files, or `cargo test` for Rust test sources. Unsupported projects or projects without detectable tests fail validation explicitly.
 
 ## Install on Ubuntu
 
-Install Python 3.11+, Git, and `uv`, configure the already-installed Hermes/Ollama runtime, then:
+Install Python 3.11+, Git, and `uv`, configure the selected coding backend and OpenAI-compatible model endpoint, then:
 
 ```bash
 uv sync --locked

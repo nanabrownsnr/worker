@@ -1,4 +1,5 @@
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, TypedDict
@@ -24,17 +25,21 @@ class Orchestrator:
         self.deployment = deployment or DeploymentGate(settings)
         from .workers.triage import FailureTriage
         self.triage = triage or FailureTriage(settings)
+        from .planning import ProjectPlanner
+        self.planner = ProjectPlanner(settings)
         self.s.data_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = sqlite3.connect(self.s.data_dir / "checkpoints.sqlite", check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
         graph = StateGraph(WorkerState)
-        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("prepare_workspace", self.prepare_workspace), ("plan_project", self.plan_project), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("escalation", self.escalation), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             graph.add_node(name, node)
         graph.add_edge(START, "prepare_workspace")
-        graph.add_edge("prepare_workspace", "development")
+        graph.add_edge("prepare_workspace", "plan_project")
+        graph.add_edge("plan_project", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "escalation": "escalation", "deploy": "deployment_validation", "failure": "terminal_failure"})
         graph.add_edge("failure_triage", "development")
+        graph.add_edge("escalation", "development")
         graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
@@ -42,12 +47,14 @@ class Orchestrator:
         graph.add_edge("terminal_failure", END)
         self.workflow = graph.compile(checkpointer=self.checkpointer)
         resume_graph = StateGraph(WorkerState)
-        for name, node in (("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("resume_preflight", self.resume_preflight), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("escalation", self.escalation), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             resume_graph.add_node(name, node)
-        resume_graph.add_edge(START, "development")
+        resume_graph.add_edge(START, "resume_preflight")
+        resume_graph.add_conditional_edges("resume_preflight", self.route_resume, {"development": "development", "testing": "independent_testing", "deployment": "deployment_validation", "publish": "github_publication", "notify": "telegram_notification", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "escalation": "escalation", "deploy": "deployment_validation", "failure": "terminal_failure"})
         resume_graph.add_edge("failure_triage", "development")
+        resume_graph.add_edge("escalation", "development")
         resume_graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("github_publication", self.route_publish, {"notify": "telegram_notification", "repair": "development", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("telegram_notification", self.route_notification, {"success": "terminal_success", "failure": "terminal_failure"})
@@ -70,12 +77,70 @@ class Orchestrator:
             job.final_result = {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
 
+    def plan_project(self, state):
+        job = self._job(state)
+        if job.workflow_mode == "incremental" and not job.project_plan:
+            try:
+                job.project_plan = self.planner.plan(job.prompt)
+            except Exception as exc:  # noqa: BLE001 - planner failure has a deterministic fallback
+                job.failure_history.append("Planner fallback: " + str(exc))
+                job.project_plan = self.planner.plan_without_model(job.prompt)
+        return self._save(job)
+
+    def resume_preflight(self, state):
+        """Select the next safe stage from durable evidence; never restart Hermes blindly."""
+        job = self._job(state)
+        if not job.final_result:
+            job.failure_history.append("Resume preflight inspected durable stage evidence")
+        return self._save(job)
+
+    def route_resume(self, state):
+        job = self._job(state)
+        if job.final_result:
+            return "failure"
+        if job.remote_verified_sha:
+            return "notify" if not job.notification_status else "failure"
+        if job.test_result and not job.test_result.get("passed"):
+            return "testing"
+        if job.commit_sha and job.deployment_result.get("passed"):
+            return "notify"
+        if job.test_result.get("passed") and not job.deployment_result:
+            return "deployment"
+        if job.test_result.get("passed") and job.deployment_result and not job.deployment_result.get("passed"):
+            return "deployment"
+        if job.test_result.get("passed") and job.deployment_result.get("passed"):
+            return "publish"
+        if job.development_result.get("returncode") == 0 and not job.test_result:
+            return "testing"
+        return "development"
+
     def development(self, state):
         job = self._job(state)
         if job.final_result: return self._save(job)
         job.status = "developing"; job.attempt_number += 1
         self._save(job)
-        result = self.hermes.develop(job.prompt, Path(job.workspace), job.failure_context); job.development_result = result
+        prompt = job.prompt
+        if job.workflow_mode == "incremental" and job.project_plan:
+            ticket = job.project_plan[job.current_ticket_index]
+            ticket.status = "active"; ticket.attempt_count += 1
+            prompt = (f"PROJECT BRIEF:\n{job.prompt}\n\nCURRENT TICKET {ticket.ticket_id}: {ticket.title}\n"
+                      f"GOAL:\n{ticket.goal}\nACCEPTANCE CRITERIA:\n- " + "\n- ".join(ticket.acceptance_criteria) +
+                      "\nImplement only this ticket, preserve completed work, and run its focused tests plus regression tests.")
+        if job.workflow_mode == "incremental":
+            result = self.hermes.develop(prompt, Path(job.workspace), job.failure_context, model=self.s.implementer_model)
+        else:
+            result = self.hermes.develop(prompt, Path(job.workspace), job.failure_context)
+        job.development_result = result
+        if result.get("returncode") == 0 and job.workflow_mode == "incremental":
+            changed = subprocess.run(["git", "-C", job.workspace, "status", "--porcelain"], capture_output=True, text=True, timeout=30, check=False).stdout.strip()
+            job.development_result["changed_files"] = changed.splitlines() if changed else []
+            if not changed:
+                job.development_result["returncode"] = 1
+                result["returncode"] = 1
+                job.development_result["classification"] = "no_meaningful_work"
+                job.development_result["reason"] = "Hermes exited successfully without changing the workspace"
+                job.failure_context = job.development_result["reason"]
+                job.failure_history.append(job.failure_context)
         if result.get("returncode") != 0:
             job.hermes_retry_count += 1
             job.failure_context = (f"{result.get('reason', 'Hermes failed')}\nclassification={result.get('classification')}\n"
@@ -102,8 +167,10 @@ class Orchestrator:
         if job.final_result: return self._save(job)
         job.status = "testing"; result = self.tester.test(Path(job.workspace)); job.test_result = result
         if not result.get("passed"):
-            job.return_count += 1; job.failure_context = result.get("summary", "pytest failed"); job.failure_history.append(job.failure_context)
+            job.return_count += 1; job.ticket_failure_count += 1; job.failure_context = result.get("summary", "pytest failed"); job.failure_history.append(job.failure_context)
             if job.return_count >= job.max_returns: job.final_result = {"outcome": "failed", "reason": "maximum validation returns reached"}
+        elif job.workflow_mode == "incremental" and job.project_plan:
+            job.project_plan[job.current_ticket_index].status = "completed"
         return self._save(job)
 
     def failure_triage(self, state):
@@ -116,6 +183,18 @@ class Orchestrator:
                                "\nReason: " + diagnosis.get("reason", "") +
                                "\nRecommended action: " + diagnosis.get("recommended_action", ""))[-8000:]
         job.failure_history.append("Triage: " + diagnosis.get("classification", "unknown"))
+        return self._save(job)
+
+    def escalation(self, state):
+        job = self._job(state)
+        if job.final_result or not job.project_plan:
+            return self._save(job)
+        ticket = job.project_plan[job.current_ticket_index]
+        guidance = self.planner.guidance(job.prompt, ticket, job.failure_context)
+        job.escalation_count += 1
+        job.ticket_failure_count = 0
+        job.failure_context = "Senior guidance:\n" + guidance
+        job.failure_history.append(job.failure_context)
         return self._save(job)
 
     def github_publication(self, state):
@@ -137,7 +216,10 @@ class Orchestrator:
     def deployment_validation(self, state):
         job = self._job(state)
         if job.final_result: return self._save(job)
-        result = self.deployment.run(Path(job.workspace), job.deployment_env_path) if self.s.deployment_gate_enabled else {"passed": True, "skipped": True, "summary": "Deployment gate disabled"}
+        try:
+            result = self.deployment.run(Path(job.workspace), job.deployment_env_path) if self.s.deployment_gate_enabled else {"passed": True, "skipped": True, "summary": "Deployment gate disabled"}
+        except Exception as exc:  # noqa: BLE001
+            result = {"passed": False, "summary": f"Deployment gate infrastructure error: {exc}", "error": type(exc).__name__}
         job.deployment_result = result
         if not result.get("passed"):
             job.deployment_retry_count += 1
@@ -172,7 +254,13 @@ class Orchestrator:
         job = self._job(state)
         if job.final_result: return "failure"
         if job.test_result.get("passed") is False:
+            if job.workflow_mode == "incremental" and job.ticket_failure_count >= self.s.ticket_max_attempts:
+                if job.escalation_count == 0:
+                    self.store.put(job); return "escalation"
+                job.final_result = {"outcome": "failed", "reason": "ticket failed after senior escalation"}; self.store.put(job); return "failure"
             return "triage" if job.return_count >= 2 else "development"
+        if job.workflow_mode == "incremental" and job.current_ticket_index + 1 < len(job.project_plan):
+            job.current_ticket_index += 1; job.ticket_failure_count = 0; job.return_count = 0; job.test_result = {}; job.development_result = {}; job.failure_context = ""; self.store.put(job); return "development"
         return "deploy"
 
     def route_deployment(self, state):
@@ -191,6 +279,6 @@ class Orchestrator:
         return "success"
 
     def run(self, job: Job, start_at="prepare_workspace"):
-        workflow = self.resume_workflow if start_at == "development" else self.workflow
+        workflow = self.resume_workflow if start_at in ("development", "resume") else self.workflow
         result = workflow.invoke({"job": job.model_dump()}, config={"configurable": {"thread_id": job.job_id}})
         return self._job(result)

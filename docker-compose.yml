@@ -4,6 +4,8 @@ services:
     container_name: worker
     restart: unless-stopped
     user: "${WORKER_UID:-1001}:${WORKER_GID:-1003}"
+    group_add:
+      - "1002"
     env_file:
       - .env
     environment:
@@ -14,6 +16,10 @@ services:
       AUTODEV_DATA_DIR: /var/lib/worker/data
       HERMES_COMMAND: /usr/local/bin/hermes
       HERMES_ENDPOINT: http://host.docker.internal:8000/v1
+      HERMES_CONTAINER_ENABLED: "true"
+      HERMES_CONTAINER_IMAGE: worker-worker:latest
+      HERMES_HOST_DATA_DIR: ${PWD}/data
+      HERMES_NETWORK: host
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -22,6 +28,8 @@ services:
       - ./data:/var/lib/worker/data
       - ${HOME}/.hermes:/home/nbrown/.hermes
       - ${HOME}/.local/bin/hermes:/usr/local/bin/hermes:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/libexec/docker/cli-plugins/docker-compose:/usr/libexec/docker/cli-plugins/docker-compose:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s

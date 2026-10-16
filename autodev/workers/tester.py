@@ -1,5 +1,7 @@
 import json
 import shutil
+import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 from ..execution import redact, run
@@ -19,10 +21,19 @@ class PytestRunner:
 
     def detect_runner(self, workspace: Path):
         if self.s.test_command: return self.s.test_command.split(), "override", "configured TEST_COMMAND"
-        python_project = (workspace / "uv.lock").exists() or (workspace / "pyproject.toml").exists()
+        python_markers = (
+            "pyproject.toml", "uv.lock", "requirements.txt", "requirements-dev.txt",
+            "setup.py", "setup.cfg", "tox.ini", "pytest.ini",
+        )
+        python_project = any((workspace / marker).exists() for marker in python_markers)
+        if not python_project:
+            python_project = any(p.suffix == ".py" for p in workspace.rglob("*.py"))
         if python_project and self._has_python_tests(workspace):
-            if shutil.which("uv"): return ["uv", "run", "pytest", "-q"], "python-uv", "Python project with pytest files"
+            uv_project = (workspace / "uv.lock").exists() or (workspace / "pyproject.toml").exists()
+            if uv_project and shutil.which("uv"): return ["uv", "run", "pytest", "-q"], "python-uv", "Python uv project with pytest files"
             if (workspace / ".venv/bin/python").exists(): return [str(workspace / ".venv/bin/python"), "-m", "pytest", "-q"], "python-venv", "Python project with .venv and pytest files"
+            if shutil.which("pytest"): return ["pytest", "-q"], "python-pytest", "Python project with pytest executable and pytest files"
+            if find_spec("pytest"): return [sys.executable, "-m", "pytest", "-q"], "python-interpreter", "Python project using the service interpreter's pytest"
             return None, "python", "Python tests found but neither uv nor .venv/bin/python is available"
         if (workspace / "package.json").exists():
             try: package = json.loads((workspace / "package.json").read_text(encoding="utf-8"))

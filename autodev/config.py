@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     hermes_retries: int = 2
     hermes_retry_delay_seconds: float = 2.0
     hermes_endpoint: str = ""
+    hermes_container_enabled: bool = True
+    hermes_container_image: str = "worker-worker:latest"
+    hermes_host_data_dir: str = ""
+    hermes_network: str = "host"
+    hermes_memory: str = "8g"
+    hermes_cpus: str = "4"
+    hermes_pids_limit: int = 256
     test_timeout_seconds: int = 900
     test_command: str = ""
     git_remote_name: str = "origin"
@@ -33,6 +40,21 @@ class Settings(BaseSettings):
     deployment_timeout_seconds: int = 300
     deployment_retries: int = 2
     deployment_log_patterns: str = "traceback,exception,error:"
+    deployment_port_start: int = 8003
+    deployment_port_end: int = 8005
     triage_enabled: bool = True
     triage_model: str = "glm-4.7-flash:latest"
     triage_timeout_seconds: int = 90
+    incremental_workflow_enabled: bool = True
+    ticket_max_attempts: int = 5
+    planner_model: str = "qwen3-coder:30b"
+    implementer_model: str = "vllm/qwen3.6-35b-a3b"
+    worker_agent: str = Field("opencode", validation_alias=AliasChoices("WORKER_AGENT", "AGENT_BACKEND"))
+    aider_command: str = "aider"
+    aider_model: str = "qwen3-coder-30b"
+    aider_endpoint: str = ""
+    aider_timeout_seconds: int = 3600
+    opencode_command: str = "opencode"
+    opencode_model: str = "vllm/qwen3.6-35b-a3b"
+    opencode_endpoint: str = ""
+    opencode_timeout_seconds: int = 3600
