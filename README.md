@@ -4,6 +4,8 @@ Worker is a persistent, single-worker coding service. It accepts an unrestricted
 
 The five-return limit counts failed independent validations. The fifth failed validation is terminal; it does not start a sixth development attempt. No Render deployment, coverage enforcement, frontier escalation, or parallel jobs are implemented.
 
+The stable workflow sends the complete prompt directly to the selected coding backend. The experimental ticket planner is retained in code but disabled by default (`INCREMENTAL_WORKFLOW_ENABLED=false`).
+
 If a job includes `deployment_env`, provide it as a JSON object of environment variable names to values, for example `{"MONGODB_URI":"mongodb://mongodb:27017/twynity_mcp","ENCRYPTION_KEY":"..."}`. Worker writes that mapping to a protected temporary `.env` file outside the checkout and uses it only for local Docker/Compose validation. It is never sent to Hermes, persisted in graph state, returned by the API, logged, or committed. Docker repositories must build, start, complete their configured smoke run, and produce no configured fatal log patterns before publication. Deployment repair attempts are separate from the five pytest returns.
 
 `POST /jobs/{job_id}/resume` may include the same `deployment_env` object. If omitted, the child inherits the parent job's saved environment; if supplied, it overrides it for that child only.

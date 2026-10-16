@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     triage_enabled: bool = True
     triage_model: str = "glm-4.7-flash:latest"
     triage_timeout_seconds: int = 90
-    incremental_workflow_enabled: bool = True
+    # Ticket planning is retained for later experiments but disabled for the
+    # stable direct-prompt workflow until checkpoint advancement is hardened.
+    incremental_workflow_enabled: bool = False
     ticket_max_attempts: int = 5
     planner_model: str = "qwen3-coder:30b"
     implementer_model: str = "vllm/qwen3.6-35b-a3b"
