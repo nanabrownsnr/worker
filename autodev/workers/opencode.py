@@ -31,13 +31,14 @@ class OpenCode:
         provider_name, model_id = selected_model.split("/", 1) if "/" in selected_model else ("llamacpp", selected_model)
         config_path.write_text(json.dumps({
             "$schema": "https://opencode.ai/config.json",
+            "model": selected_model,
             "provider": {provider_name: {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "vLLM",
-                "options": {"baseURL": endpoint, "apiKey": "worker-local"},
+                "name": "Local llama.cpp",
+                "options": {"baseURL": endpoint},
                 "models": {model_id: {
-                    "name": model_id,
-                    "limit": {"context": 80000, "output": 8192},
+                    "name": "Qwen3.6 35B Q4_K_M",
+                    "limit": {"context": 262144, "output": 32768},
                 }},
             }},
         }), encoding="utf-8")
