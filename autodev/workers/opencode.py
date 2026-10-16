@@ -27,19 +27,21 @@ class OpenCode:
         log_path = log_dir / f"opencode-attempt-{int(time.time() * 1000)}.log"
         config_path = workspace / "opencode.json"
         endpoint = self.s.opencode_endpoint or self.s.hermes_endpoint
+        selected_model = model or self.s.opencode_model
+        provider_name, model_id = selected_model.split("/", 1) if "/" in selected_model else ("llamacpp", selected_model)
         config_path.write_text(json.dumps({
             "$schema": "https://opencode.ai/config.json",
-            "provider": {"vllm": {
+            "provider": {provider_name: {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "vLLM",
                 "options": {"baseURL": endpoint, "apiKey": "worker-local"},
-                "models": {"qwen3.6-35b-a3b": {
-                    "name": "Qwen3.6 35B A3B",
+                "models": {model_id: {
+                    "name": model_id,
                     "limit": {"context": 80000, "output": 8192},
                 }},
             }},
         }), encoding="utf-8")
-        args = [self.s.opencode_command, "run", "--auto", "--model", model or self.s.opencode_model, instruction]
+        args = [self.s.opencode_command, "run", "--auto", "--model", selected_model, instruction]
         env = {"OPENCODE_API_KEY": "worker-local"}
         try:
             result = run(args, cwd=workspace, timeout=self.s.opencode_timeout_seconds, env=env, log_path=log_path)
