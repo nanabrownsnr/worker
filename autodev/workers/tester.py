@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+import time
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -51,8 +52,12 @@ class PytestRunner:
         args, framework, detection = self.detect_runner(workspace)
         if args is None:
             return {"command": [], "framework": framework, "returncode": 2, "passed": False, "summary": detection, "stdout": "", "stderr": detection, "collected": False, "timed_out": False}
+        log_dir=self.s.data_dir / 'logs' / workspace.name
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path=log_dir / f'pytest-{int(time.time() * 1000)}.log'
         r = run(args, cwd=workspace, timeout=self.s.test_timeout_seconds)
+        log_path.write_text(redact(r.get("stdout", "") + "\n" + r.get("stderr", "")), encoding="utf-8")
         stdout, stderr = redact(r["stdout"]), redact(r["stderr"])
         output = stdout + "\n" + stderr
         collected = "collected" in output or " passed" in output or " failed" in output or framework in ("node", "go", "rust", "override")
-        return {"command": args, "framework": framework, "detection": detection, "returncode": r["returncode"], "passed": r["returncode"] == 0 and collected and not r["timed_out"], "summary": output[-6000:], "stdout": stdout[-6000:], "stderr": stderr[-6000:], "collected": collected, "timed_out": r["timed_out"], "duration": r["duration"]}
+        return {"command": args, "framework": framework, "detection": detection, "returncode": r["returncode"], "passed": r["returncode"] == 0 and collected and not r["timed_out"], "summary": output[-6000:], "stdout": stdout[-6000:], "stderr": stderr[-6000:], "collected": collected, "timed_out": r["timed_out"], "duration": r["duration"], "log_path": str(log_path)}

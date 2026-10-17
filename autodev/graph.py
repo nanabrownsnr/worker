@@ -222,7 +222,7 @@ class Orchestrator:
         job.deployment_result = result
         if not result.get("passed"):
             job.deployment_retry_count += 1
-            job.failure_context = "Deployment validation failed: " + result.get("summary", "unknown failure")
+            job.failure_context = ("Deployment validation failed: " + result.get("summary", "unknown failure") + "\n" + "exit_code=" + str(result.get("returncode")) + " timed_out=" + str(result.get("timed_out", False)) + "\n" + result.get("stderr", "")[-4000:] + "\n" + result.get("stdout", "")[-4000:])
             job.failure_history.append(job.failure_context)
             if job.deployment_retry_count > self.s.deployment_retries:
                 job.final_result = {"outcome": "failed", "reason": job.failure_context}
