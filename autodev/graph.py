@@ -31,13 +31,12 @@ class Orchestrator:
         self._checkpoint_connection = sqlite3.connect(self.s.data_dir / "checkpoints.sqlite", check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
         graph = StateGraph(WorkerState)
-        for name, node in (("prepare_workspace", self.prepare_workspace), ("plan_project", self.plan_project), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("escalation", self.escalation), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
+        for name, node in (("prepare_workspace", self.prepare_workspace), ("development", self.development), ("independent_testing", self.independent_testing), ("failure_triage", self.failure_triage), ("escalation", self.escalation), ("deployment_validation", self.deployment_validation), ("github_publication", self.github_publication), ("telegram_notification", self.telegram_notification), ("terminal_success", self.terminal_success), ("terminal_failure", self.terminal_failure)):
             graph.add_node(name, node)
         graph.add_edge(START, "prepare_workspace")
-        graph.add_edge("prepare_workspace", "plan_project")
-        graph.add_edge("plan_project", "development")
+        graph.add_edge("prepare_workspace", "development")
         graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "escalation": "escalation", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
         graph.add_edge("failure_triage", "development")
         graph.add_edge("escalation", "development")
         graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
@@ -52,7 +51,7 @@ class Orchestrator:
         resume_graph.add_edge(START, "resume_preflight")
         resume_graph.add_conditional_edges("resume_preflight", self.route_resume, {"development": "development", "testing": "independent_testing", "deployment": "deployment_validation", "publish": "github_publication", "notify": "telegram_notification", "failure": "terminal_failure"})
         resume_graph.add_conditional_edges("development", self.route_development, {"retry_development": "development", "testing": "independent_testing", "failure": "terminal_failure"})
-        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "triage": "failure_triage", "escalation": "escalation", "deploy": "deployment_validation", "failure": "terminal_failure"})
+        resume_graph.add_conditional_edges("independent_testing", self.route_test, {"development": "development", "deploy": "deployment_validation", "failure": "terminal_failure"})
         resume_graph.add_edge("failure_triage", "development")
         resume_graph.add_edge("escalation", "development")
         resume_graph.add_conditional_edges("deployment_validation", self.route_deployment, {"development": "development", "publish": "github_publication", "failure": "terminal_failure"})
@@ -203,14 +202,14 @@ class Orchestrator:
             result = self.git.publish(Path(job.workspace), job.working_branch); job.commit_sha = result.get("commit_sha", ""); job.remote_verified_sha = result.get("remote_verified_sha", ""); job.published_branch = job.working_branch; job.final_result = {"outcome": "no_changes" if result.get("no_changes") else "completed", "verification": job.test_result}
         except GitPublicationError as exc:
             job.failure_context = str(exc)
-            if exc.repairable and job.git_repair_count < self.s.git_repair_retries:
-                job.git_repair_count += 1
-                job.failure_history.append("Git publication hygiene failure: " + str(exc))
-                job.final_result = {}
-            else:
-                job.final_result = {"outcome": "failed", "reason": str(exc)}
+            job.git_repair_count += 1
+            job.failure_history.append("Git publication failure: " + str(exc))
+            job.final_result = {} if job.git_repair_count <= self.s.git_repair_retries else {"outcome": "failed", "reason": str(exc)}
         except Exception as exc:  # noqa: BLE001
-            job.final_result = {"outcome": "failed", "reason": str(exc)}
+            job.failure_context = str(exc)
+            job.git_repair_count += 1
+            job.failure_history.append("Git publication failure: " + str(exc))
+            job.final_result = {} if job.git_repair_count <= self.s.git_repair_retries else {"outcome": "failed", "reason": str(exc)}
         return self._save(job)
 
     def deployment_validation(self, state):
@@ -258,7 +257,7 @@ class Orchestrator:
                 if job.escalation_count == 0:
                     self.store.put(job); return "escalation"
                 job.final_result = {"outcome": "failed", "reason": "ticket failed after senior escalation"}; self.store.put(job); return "failure"
-            return "triage" if job.return_count >= 2 else "development"
+            return "development"
         if job.workflow_mode == "incremental" and job.current_ticket_index + 1 < len(job.project_plan):
             job.current_ticket_index += 1; job.ticket_failure_count = 0; job.return_count = 0; job.test_result = {}; job.development_result = {}; job.failure_context = ""; self.store.put(job); return "development"
         return "deploy"
