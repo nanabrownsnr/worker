@@ -5,3 +5,5 @@ __pycache__/
 .ruff_cache/
 .env
 data/
+node_modules/
+autodev/ui/tasks/node_modules/
